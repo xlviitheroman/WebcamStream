@@ -93,11 +93,16 @@ sealed class StreamSupervisor : IDisposable
         IntPtr env = IntPtr.Zero;
         try
         {
-            if (!DuplicateTokenEx(token, 0x018B, IntPtr.Zero, 2, 1, out primary))
+            // TOKEN_ALL_ACCESS. The duplicated token otherwise keeps session 0, and the
+            // camera frame server then fails the worker with 0x80070005.
+            if (!DuplicateTokenEx(token, 0x000F01FF, IntPtr.Zero, 2, 1, out primary)
+                && !DuplicateTokenEx(token, 0x018B, IntPtr.Zero, 2, 1, out primary))
             {
                 Log.Warn($"DuplicateTokenEx failed (Win32 {Marshal.GetLastWin32Error()}).");
                 return false;
             }
+            if (!SetTokenInformation(primary, 12, ref session, sizeof(uint)))
+                Log.Warn($"Could not place the camera worker in session {session} (Win32 {Marshal.GetLastWin32Error()}).");
             CreateEnvironmentBlock(out env, primary, false);
             string exe = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "WebcamStream.exe");
             string config = string.IsNullOrWhiteSpace(_configPath)
@@ -237,6 +242,7 @@ sealed class StreamSupervisor : IDisposable
     [DllImport("kernel32.dll")] static extern uint WTSGetActiveConsoleSessionId();
     [DllImport("wtsapi32.dll", SetLastError = true)] static extern bool WTSQueryUserToken(uint sessionId, out IntPtr token);
     [DllImport("advapi32.dll", SetLastError = true)] static extern bool DuplicateTokenEx(IntPtr token, uint access, IntPtr attributes, int level, int type, out IntPtr primary);
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool SetTokenInformation(IntPtr token, int informationClass, ref uint sessionId, int length);
     [DllImport("userenv.dll", SetLastError = true)] static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr token, bool inherit);
     [DllImport("userenv.dll", SetLastError = true)] static extern bool DestroyEnvironmentBlock(IntPtr env);
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]

@@ -85,7 +85,7 @@ static class MediaFoundationCapture
         {
             int hr = camera.Reader.ReadSample(FirstVideo, 0, out _, out int flags, out _, out IntPtr samplePtr);
             if (hr < 0)
-                throw new InvalidOperationException($"ReadSample failed: 0x{hr:X8}. If this is access denied, turn on Settings > Privacy & security > Camera > Let desktop apps access your camera, and run WebcamStream in the logged-on session.");
+                throw new InvalidOperationException(AccessDenied(hr, "ReadSample"));
             if (samplePtr == IntPtr.Zero)
             {
                 if ((flags & 0x1) != 0)
@@ -335,7 +335,14 @@ static class MediaFoundationCapture
     static void Check(int hr, string what)
     {
         if (hr < 0)
-            throw new InvalidOperationException($"{what} failed (0x{hr:X8}).");
+            throw new InvalidOperationException(AccessDenied(hr, what));
+    }
+
+    static string AccessDenied(int hr, string what)
+    {
+        if (hr == unchecked((int)0x80070005))
+            return $"{what} failed (0x80070005 access denied). Windows refused the camera. Run Install-WebcamStream.ps1 from an elevated PowerShell, then sign out and back in. The service opens the camera in the signed-in session, not in session 0.";
+        return $"{what} failed (0x{hr:X8}).";
     }
 
     sealed class OpenCamera

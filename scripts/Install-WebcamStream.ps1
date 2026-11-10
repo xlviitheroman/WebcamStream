@@ -233,8 +233,13 @@ namespace WebcamStream {
         foreach ($sub in $consent) { Set-RegString $Root $sub "Value" "Allow" }
         if ($Machine) {
             Set-RegDword $Root ("SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Overrides\" + $webcamGuid) "SensorPermissionState" 1
+            # The frame server refuses a service with 0x80070005. Off means the process
+            # opens the camera device itself.
+            Set-RegDword $Root "SOFTWARE\Microsoft\Windows Media Foundation\Platform" "EnableFrameServerMode" 0
+            Set-RegDword $Root "SOFTWARE\WOW6432Node\Microsoft\Windows Media Foundation\Platform" "EnableFrameServerMode" 0
         } else {
             Set-RegDword $Root ("SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Permissions\" + $webcamGuid) "SensorPermissionState" 1
+            Set-RegDword $Root "SOFTWARE\Microsoft\Windows Media Foundation\Platform" "EnableFrameServerMode" 0
         }
     }
 
@@ -253,7 +258,8 @@ namespace WebcamStream {
     function Test-UserAccount([string]$Name) {
         if ($Name -like "*_Classes") { return $false }
         if ($Name -eq ".DEFAULT") { return $true }
-        if ($Name -match '^(S-1-5-18|S-1-5-19|S-1-5-20)$') { return $false }
+        # LocalSystem is the service identity. Its hive has to allow the camera too.
+        if ($Name -match '^(S-1-5-18|S-1-5-19|S-1-5-20)$') { return $true }
         return $Name -match '^S-1-\d+(-\d+)+$'
     }
 
@@ -333,8 +339,38 @@ namespace WebcamStream {
         $hklm.Dispose()
     }
 
-    Write-Host "Webcam access is forced on for Windows apps, and desktop apps are allowed."
+    foreach ($svcName in @("FrameServer", "FrameServerMonitor")) {
+        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+        if (-not $svc) { continue }
+        try { Restart-Service -Name $svcName -Force -ErrorAction Stop }
+        catch { Write-Host "Could not restart $svcName. Reboot if the camera still returns 0x80070005." }
+    }
+
+    Write-Host "Webcam access is forced on for Windows apps, desktop apps, and the WebcamStream service."
     Write-Host "A person who is already signed in may need to sign out once before the camera opens."
+}
+
+function Grant-WebcamStreamAccess {
+    param([string]$Path, [bool]$Container)
+    $acl = Get-Acl -LiteralPath $Path
+    $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $none = [System.Security.AccessControl.PropagationFlags]::None
+    $allow = [System.Security.AccessControl.AccessControlType]::Allow
+    foreach ($entry in @(
+        @{ Sid = "S-1-5-18"; Rights = "FullControl" },
+        @{ Sid = "S-1-5-32-544"; Rights = "FullControl" },
+        @{ Sid = "S-1-5-32-545"; Rights = "ReadAndExecute" }
+    )) {
+        $id = New-Object System.Security.Principal.SecurityIdentifier($entry.Sid)
+        $rights = [System.Security.AccessControl.FileSystemRights]$entry.Rights
+        if ($Container) {
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($id, $rights, $inherit, $none, $allow)
+        } else {
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($id, $rights, $allow)
+        }
+        $acl.SetAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
 function Invoke-Sc {
@@ -373,6 +409,9 @@ if (-not (Test-Path -LiteralPath $config)) {
 }
 
 $exe = Join-Path $InstallDir "WebcamStream.exe"
+Grant-WebcamStreamAccess -Path $InstallDir -Container $true
+Grant-WebcamStreamAccess -Path $exe -Container $false
+if (Test-Path -LiteralPath $config) { Grant-WebcamStreamAccess -Path $config -Container $false }
 $port, $rtpStart, $rtpEnd = Read-StreamSettings $config
 
 Set-WebcamFirewall -DisplayName "WebcamStream RTSP" -Protocol "TCP" -Ports "$port"
@@ -382,7 +421,7 @@ Enable-WebcamForAllUsers
 
 if ($Mode -eq "Service") {
     Write-Host "Installing the WebcamStream Windows service."
-    Write-Host "It runs as LocalSystem, and opens the webcam after someone signs in to this PC."
+    Write-Host "It runs as LocalSystem. After someone signs in, the camera opens in that person's session."
     Invoke-Sc "stop WebcamStream"
     Start-Sleep -Seconds 1
     Invoke-Sc "delete WebcamStream"

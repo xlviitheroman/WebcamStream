@@ -25,8 +25,8 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-9fd7f2149f5808dda0b187f338a154fc775ae8a81282274e23476bc40ac11313  WebcamStream.exe
-f73bfe3af62b32150bc23497411aa54582112246375dd3c3e93cb21a0a170e39  WebcamStream-win-x64.zip
+b8f40138cc95103052d10f4eaff04d86607d5e41ada8c67fc5dd52e28ba3588c  WebcamStream.exe
+0de398c5025bed46d1dedc410ff327413999b2eaa7fe2a1590ea680317cf799e  WebcamStream-win-x64.zip
 ```
 
 The public repository is <https://github.com/xlviitheroman/WebcamStream>. Once the source is on that repository, `.github/workflows/release.yml` builds this same exe on a Windows runner and attaches it to release **v1.0.0**. Those downloads will be:
@@ -187,7 +187,9 @@ It writes these values through the 64-bit registry API. `reg.exe` is not used, b
 
 The machine keys cover the PC. The same consent values are then written for `.DEFAULT`, every signed-in user, every other profile under `ProfileList` whose `NTUSER.DAT` can be loaded, and the Default user template so the next new account is allowed too. A profile Windows has locked is skipped. The machine policy still forces the camera on for that account.
 
-Someone who is already signed in may need to sign out once before Media Foundation notices the change. Uninstall removes the service, the task, and the firewall rules. It does not turn the camera back off.
+The installer also turns off Media Foundation frame-server mode. That broker returns `0x80070005` (access denied) to a Windows service even when the privacy switch is on. With it off, WebcamStream opens the camera device directly. LocalSystem, Local Service, and Network Service receive the same Allow values as a signed-in user. The program folder grants SYSTEM full control and Users read and execute, so the service and the signed-in worker can both start the exe.
+
+The service itself stays in session 0. It starts a worker in the signed-in session, which is the session Windows will let open a camera. Someone who is already signed in may need to sign out once before Media Foundation notices the change. Uninstall removes the service, the task, and the firewall rules. It does not turn the camera back off and it does not turn frame-server mode back on.
 
 The scheduled task and the service worker both run as the signed-in user, in that user's session. A service that tried to open the camera from session 0 usually gets access denied. WebcamStream does not do that.
 
@@ -206,7 +208,7 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | --- | --- |
 | Installer stops with "Invalid class" or `reg.exe` cannot find a key | Use this copy of `Install-WebcamStream.ps1`. It opens the ports with `netsh` and writes the camera policy directly. Run it from an elevated PowerShell. |
 | Exacq never connects | Confirm the URL, port 554, and the firewall rules named WebcamStream RTSP and WebcamStream RTP. The log shows rejected addresses when the allow list is the reason. |
-| `ReadSample failed` or access denied | Run the installer again from an elevated PowerShell. It forces camera access on for every account. Sign out and back in if that user was already signed in, then run `--console` once. Close any other app that has the camera open. |
+| `0x80070005` or access denied | Run the installer again from an elevated PowerShell. It allows the camera for every account, including LocalSystem, and turns off the frame server that blocks a service. Sign out and back in, then start the service or the scheduled task. Close any other app that has the camera open. |
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |
