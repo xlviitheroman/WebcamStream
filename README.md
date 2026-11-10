@@ -16,7 +16,7 @@ The stream requires that username and password. Change both in `config.jsonc`. A
 
 `release/WebcamStream-win-x64.zip` is the package to install. It contains:
 
-- `WebcamStream.exe`, self-contained. Running it does not need a .NET install.
+- `WebcamStream.exe`, self-contained, plus the runtime files that belong beside it. Running it does not need a .NET install. Keep those files together.
 - `config.jsonc`
 - `Install-WebcamStream.ps1` and `Uninstall-WebcamStream.ps1`
 
@@ -25,16 +25,14 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-0f61c01c39f8d958b88fe406004fa361e8d6ab689979b2a36a8acd0a5faf1fbf  WebcamStream.exe
-6276c4858d1bc7bc8118e863180c8bc43c995ad57dce84ef79d2cc47d370be5f  WebcamStream-win-x64.zip
+6e0b1980766891a515eb53821598b68a1d80fc13c6d5445447c460beb57dc2ce  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.8**. `.github/workflows/release.yml` builds this exe on a Windows runner and attaches it to release **v1.0.8**. Those downloads are:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.9**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.9**:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.8/WebcamStream.exe>
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.8/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.9/WebcamStream-win-x64.zip>
 
-Older releases are deleted when a new build is published. Use this zip.
+Unzip the whole folder and run the installer from there. `WebcamStream.exe` needs the files beside it, which is what lets the Windows service answer before Windows gives up with error 1053. Older releases are deleted when a new build is published.
 
 ## What you install, and where
 
@@ -42,7 +40,7 @@ Everything lives in **`C:\ProgramData\WebcamStream`**.
 
 | File | What it is |
 | --- | --- |
-| `WebcamStream.exe` | The program. The release build includes the runtime, so this PC does not need .NET installed. |
+| `WebcamStream.exe` and the files beside it | The program and its runtime. This PC does not need .NET installed. The installer copies the whole set. |
 | `config.jsonc` | Settings, with comments. Created on install, and also the first time the program runs if the file is missing. |
 | `WebcamStream.log` | Log. Connections, the camera mode, and errors. Not every frame. |
 | `status.json` | Camera mode, measured frame rate, and how many clients are connected. |
@@ -199,7 +197,7 @@ The scheduled task and the service worker both run as the signed-in user, in tha
 
 ```text
 dotnet test
-dotnet publish src/WebcamStream/WebcamStream.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=none -o dist/win-x64
+dotnet publish src/WebcamStream/WebcamStream.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=none -o dist/win-x64
 ```
 
 Copy `config/config.jsonc` next to the exe if you are assembling a folder by hand. The installer looks for it there and in `config\`. The exe also has the same text embedded, and writes it the first time it runs with no config file.
@@ -217,5 +215,5 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |
-| Service fails with error 1053 | The service command line was missing `--service`, so Windows waited and gave up. Use the 1.0.8 installer. It writes that command line and prepares the program files before it starts the service. |
-| Installer stops on `SetValue` | 1.0.7 passed the service environment as a string. 1.0.8 writes it as a multi-string. Run that installer again. |
+| Service fails with error 1053 | The program was unpacking the .NET runtime before it could answer Windows. Use the 1.0.9 zip, unzip the whole folder, and run that installer. It copies the runtime files beside the exe and writes the `--service` command line. |
+| Installer stops on `SetValue` | Fixed in 1.0.8 and later. Run the current installer. |

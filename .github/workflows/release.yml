@@ -34,9 +34,7 @@ jobs:
         shell: pwsh
         run: |
           dotnet publish src/WebcamStream/WebcamStream.csproj -c Release -r win-x64 --self-contained true `
-            -p:PublishSingleFile=true `
-            -p:IncludeNativeLibrariesForSelfExtract=true `
-            -p:EnableCompressionInSingleFile=true `
+            -p:PublishSingleFile=false `
             -p:DebugType=none `
             -p:DebugSymbols=false `
             -o dist/win-x64
@@ -55,7 +53,7 @@ jobs:
           notes="$(cat <<EOF
           WebcamStream $version for 64-bit Windows 10 (version 1607) or later.
 
-          WebcamStream.exe is self-contained. Do not install a .NET runtime to run it.
+          Unzip the whole folder. WebcamStream.exe needs the files beside it. Do not install a .NET runtime.
 
           --console exits with an error if the camera does not deliver a frame within 8 seconds. It does not stay suspended waiting on Windows.
 
@@ -69,16 +67,16 @@ jobs:
           ExacqVision address: rtsp://THIS-PC:554/webcam
           Username webcam, password webcam1, unless config.jsonc says otherwise.
 
-          The Windows service is installed with --service on its command line. The installer prepares the program files before starting it, so Windows does not report error 1053.
+          The runtime files stay beside WebcamStream.exe, so the service can answer Windows immediately instead of unpacking first and failing with error 1053.
 
           To build from source instead, install the .NET 8 SDK (x64).
           A framework-dependent build needs the .NET 8 Runtime (x64), the package named ".NET Runtime", not the Desktop Runtime and not the ASP.NET Core Runtime. winget id: Microsoft.DotNet.Runtime.8
           EOF
           )"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/win-x64/WebcamStream.exe dist/WebcamStream-win-x64.zip --clobber
+            gh release upload "$tag" dist/WebcamStream-win-x64.zip --clobber
           else
-            gh release create "$tag" dist/win-x64/WebcamStream.exe dist/WebcamStream-win-x64.zip \
+            gh release create "$tag" dist/WebcamStream-win-x64.zip \
               --title "WebcamStream $version" \
               --notes "$notes" \
               --target "${{ github.sha }}"

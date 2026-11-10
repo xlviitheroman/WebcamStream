@@ -47,10 +47,10 @@ static class Program
             Console.Error.WriteLine("The Windows service only runs on Windows. Use --console --test-pattern here.");
             return 1;
         }
-        var configPath = ArgValue(args, "--config");
-        WebcamStreamService.ConfigPath = configPath;
-        Log.SetPath(Path.Combine(AppConfig.ProgramDataDirectory, "WebcamStream.log"));
-        Log.Info("Windows service process is starting.");
+        Log.UseConsole = false;
+        WebcamStreamService.ConfigPath = ArgValue(args, "--config");
+        try { Log.SetPath(Path.Combine(AppConfig.ProgramDataDirectory, "WebcamStream.log")); }
+        catch { }
         System.ServiceProcess.ServiceBase.Run(new WebcamStreamService());
         Log.Info("Windows service process stopped.");
         return 0;

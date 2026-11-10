@@ -94,6 +94,7 @@ function Read-StreamSettings {
 
 function Test-FrameworkBuild {
     param([string]$Dir)
+    if (Test-Path -LiteralPath (Join-Path $Dir "coreclr.dll")) { return }
     $runtimeConfig = Join-Path $Dir "WebcamStream.runtimeconfig.json"
     if (-not (Test-Path -LiteralPath $runtimeConfig)) { return }
     $list = & dotnet --list-runtimes 2>$null
@@ -528,9 +529,15 @@ $source = Find-Source $SourceDir
 Test-FrameworkBuild $source
 Stop-ExistingWebcamStream
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Copy-Item -LiteralPath (Join-Path $source "WebcamStream.exe") -Destination (Join-Path $InstallDir "WebcamStream.exe") -Force
-Get-ChildItem -LiteralPath $source -Filter "*.pdb" -ErrorAction SilentlyContinue | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $InstallDir $_.Name) -Force
+Grant-WebcamStreamAccess -Path $InstallDir -Container $true
+# The .NET runtime files have to sit beside the exe. Packing them inside it
+# makes the service unpack them before it can answer Windows, which is error 1053.
+Get-ChildItem -LiteralPath $source -File | ForEach-Object {
+    if ($_.Extension -eq ".ps1") { return }
+    if ($_.Name -eq "config.jsonc") { return }
+    $dest = Join-Path $InstallDir $_.Name
+    Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
+    Unblock-File -LiteralPath $dest -ErrorAction SilentlyContinue
 }
 
 $config = Join-Path $InstallDir "config.jsonc"
@@ -565,13 +572,22 @@ if ($Mode -eq "Service") {
     # service manager. That wait is error 1053. Create the service with the exe
     # path only, then write the real command line into ImagePath.
     Invoke-Sc "create WebcamStream binPath= `"$exe`" start= auto obj= LocalSystem DisplayName= `"WebcamStream`""
-    Set-WebcamServiceCommand -Exe $exe -Config $config
     Invoke-Sc "description WebcamStream `"Webcam RTSP stream for recorders such as ExacqVision. Low CPU, no GPU.`""
     Invoke-Sc "failure WebcamStream reset= 86400 actions= restart/5000/restart/15000/restart/60000"
     Invoke-Sc "config WebcamStream start= auto"
+    Set-WebcamServiceCommand -Exe $exe -Config $config
     Initialize-WebcamBundle -Exe $exe
     if ($Start) {
-        Invoke-Sc "start WebcamStream"
+        $started = Invoke-ScResult "start WebcamStream"
+        if ($started.ExitCode -ne 0 -and $started.Output -notmatch "1056") {
+            $qc = Invoke-ScResult "qc WebcamStream"
+            $logPath = Join-Path $InstallDir "WebcamStream.log"
+            $tail = ""
+            if (Test-Path -LiteralPath $logPath) {
+                $tail = ((Get-Content -LiteralPath $logPath -Tail 20) -join [Environment]::NewLine)
+            }
+            throw "sc.exe start WebcamStream failed ($($started.ExitCode)): $($started.Output)`n$($qc.Output)`n$tail"
+        }
         Write-Host "Service started. The camera is opening in the signed-in session now."
     } else {
         Write-Host "Service installed. It opens the camera when someone is signed in."

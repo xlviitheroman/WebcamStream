@@ -5,6 +5,8 @@ static class Log
     static readonly object Gate = new();
     static string? _path;
 
+    public static bool UseConsole { get; set; } = true;
+
     public static void SetPath(string? path)
     {
         lock (Gate)
@@ -27,8 +29,18 @@ static class Log
         var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {level,-5} {message}";
         lock (Gate)
         {
-            Console.WriteLine(line);
-            Console.Out.Flush();
+            if (UseConsole)
+            {
+                try
+                {
+                    Console.WriteLine(line);
+                    Console.Out.Flush();
+                }
+                catch
+                {
+                    UseConsole = false;
+                }
+            }
             if (_path == null)
                 return;
             try
