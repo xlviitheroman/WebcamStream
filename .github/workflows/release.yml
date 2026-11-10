@@ -18,6 +18,15 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Install ffmpeg
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+          $cmd = Get-Command ffmpeg
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $cmd.Source)
+          ffmpeg -version
+
       - name: Test
         run: dotnet test tests/WebcamStream.Tests/WebcamStream.Tests.csproj -c Release
 
