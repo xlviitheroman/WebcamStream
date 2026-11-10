@@ -9,7 +9,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <RootNamespace>WebcamStream</RootNamespace>
     <AssemblyName>WebcamStream</AssemblyName>
-    <Version>1.0.9</Version>
+    <Version>1.0.10</Version>
     <Description>Low-CPU webcam RTSP server for Windows.</Description>
     <PublishReadyToRun>false</PublishReadyToRun>
   </PropertyGroup>

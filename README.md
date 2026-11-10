@@ -25,12 +25,12 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-6e0b1980766891a515eb53821598b68a1d80fc13c6d5445447c460beb57dc2ce  WebcamStream-win-x64.zip
+68756b602a2aa1c0cbe50d42be7f3823bf756ebef2a79f047a962d67f7a19d38  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.9**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.9**:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.10**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.10**:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.9/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.10/WebcamStream-win-x64.zip>
 
 Unzip the whole folder and run the installer from there. `WebcamStream.exe` needs the files beside it, which is what lets the Windows service answer before Windows gives up with error 1053. Older releases are deleted when a new build is published.
 
@@ -43,6 +43,7 @@ Everything lives in **`C:\ProgramData\WebcamStream`**.
 | `WebcamStream.exe` and the files beside it | The program and its runtime. This PC does not need .NET installed. The installer copies the whole set. |
 | `config.jsonc` | Settings, with comments. Created on install, and also the first time the program runs if the file is missing. |
 | `WebcamStream.log` | Log. Connections, the camera mode, and errors. Not every frame. |
+| `Install.log` | What the installer did, including `sc.exe` output. The same text is written next to the script as `Install-WebcamStream.log`. |
 | `status.json` | Camera mode, measured frame rate, and how many clients are connected. |
 
 You can run it two ways:
@@ -82,6 +83,8 @@ or:
 ```
 
 Add `-Start` to open the camera now in the session that is already signed in. You do not have to sign out. The scheduled task starts as that user, not as the elevated installer. The service starts as LocalSystem and launches the camera in the signed-in session. `-User "OFFICE\nvr"` chooses who the scheduled task runs as. The default is the account that runs the installer.
+
+The installer writes `Install-WebcamStream.log` in the folder you ran it from, and copies that file to `C:\ProgramData\WebcamStream\Install.log`. The uninstaller writes `Uninstall-WebcamStream.log` the same way. Send the log from the folder you ran when an install fails. `-Purge` removes the copy under ProgramData and leaves the one next to the script.
 
 The script copies `WebcamStream.exe` to `C:\ProgramData\WebcamStream`, writes `config.jsonc` if it is not already there, and opens the firewall for TCP 554 and the UDP port range in the config. It does not overwrite a config you have already edited.
 
@@ -215,5 +218,6 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |
-| Service fails with error 1053 | The program was unpacking the .NET runtime before it could answer Windows. Use the 1.0.9 zip, unzip the whole folder, and run that installer. It copies the runtime files beside the exe and writes the `--service` command line. |
+| Service fails with error 1053 | The program was unpacking the .NET runtime before it could answer Windows. Use the 1.0.10 zip, unzip the whole folder, and run that installer. It copies the runtime files beside the exe and writes the `--service` command line. The failure is recorded in `Install-WebcamStream.log`. |
+| Install fails | Open `Install-WebcamStream.log` in the folder you ran the script from. The same text is in `C:\ProgramData\WebcamStream\Install.log` when that folder exists. |
 | Installer stops on `SetValue` | Fixed in 1.0.8 and later. Run the current installer. |

@@ -22,6 +22,15 @@ if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction Sile
     $PSNativeCommandUseErrorActionPreference = $false
 }
 
+$script:UninstallLogPath = Join-Path $PSScriptRoot "Uninstall-WebcamStream.log"
+$script:UninstallTranscript = $false
+
+function Write-UninstallNote {
+    param([string]$Message)
+    $line = "{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $Message
+    try { Add-Content -LiteralPath $script:UninstallLogPath -Value $line -Encoding UTF8 } catch { }
+}
+
 # PowerShell 7 and 32-bit Windows PowerShell talk to the wrong service database.
 # Continue in the 64-bit Windows PowerShell 5.1 host.
 if (-not ([Environment]::Is64BitProcess -and $PSVersionTable.PSEdition -eq "Desktop")) {
@@ -40,9 +49,33 @@ if (-not ([Environment]::Is64BitProcess -and $PSVersionTable.PSEdition -eq "Desk
                 $forward += [string]$entry.Value
             }
         }
+        Write-UninstallNote "This host is $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion) $([IntPtr]::Size * 8)-bit. Relaunching $hostExe."
         & $hostExe @forward
+        Write-UninstallNote "Relaunched uninstaller exited with code $LASTEXITCODE."
         exit $LASTEXITCODE
     }
+}
+
+try {
+    Start-Transcript -Path $script:UninstallLogPath -Append -Force -IncludeInvocationHeader | Out-Null
+    $script:UninstallTranscript = $true
+} catch {
+    Write-UninstallNote "Could not start a transcript: $($_.Exception.Message)"
+}
+
+function Complete-UninstallLog {
+    Write-Host "Uninstall log: $script:UninstallLogPath"
+    $copy = Join-Path $InstallDir "Uninstall.log"
+    if ($script:UninstallTranscript) {
+        try { Stop-Transcript | Out-Null } catch { }
+        $script:UninstallTranscript = $false
+    }
+    if (-not (Test-Path -LiteralPath $script:UninstallLogPath)) { return }
+    if ($Purge) { return }
+    try {
+        if (-not (Test-Path -LiteralPath $InstallDir)) { return }
+        Copy-Item -LiteralPath $script:UninstallLogPath -Destination $copy -Force
+    } catch { }
 }
 
 function Remove-WebcamFirewallRule {
@@ -82,6 +115,8 @@ function Invoke-Sc {
     $p = [System.Diagnostics.Process]::Start($psi)
     $out = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
     $p.WaitForExit()
+    Write-Host "sc.exe $Arguments"
+    Write-Host "sc.exe exited $($p.ExitCode): $($out.Trim())"
     return [pscustomobject]@{ ExitCode = $p.ExitCode; Output = $out }
 }
 
@@ -170,6 +205,14 @@ function Repair-DeniedCameraPolicy {
     } finally { $hklm.Dispose() }
 }
 
+try {
+Write-Host "WebcamStream uninstaller"
+Write-Host ("Time: {0:yyyy-MM-dd HH:mm:ss zzz}" -f (Get-Date))
+Write-Host ("Windows: {0}" -f [Environment]::OSVersion.VersionString)
+Write-Host ("PowerShell: {0} {1} {2}-bit" -f $PSVersionTable.PSEdition, $PSVersionTable.PSVersion, ([IntPtr]::Size * 8))
+Write-Host ("User: {0}\{1}  Purge: {2}" -f $env:USERDOMAIN, $env:USERNAME, [bool]$Purge)
+Write-Host "Install directory: $InstallDir"
+
 Remove-WebcamService
 Repair-DeniedCameraPolicy
 $task = Get-ScheduledTask -TaskName "WebcamStream" -ErrorAction SilentlyContinue
@@ -186,3 +229,9 @@ if ($Purge -and (Test-Path -LiteralPath $InstallDir)) {
     Write-Host "Left the files in $InstallDir. Pass -Purge to delete them, including the config."
 }
 Write-Host "Left the webcam allowed for every account. This uninstall does not turn it off."
+} catch {
+    Write-Host ("UNINSTALL FAILED:`n" + ($_ | Out-String))
+    exit 1
+} finally {
+    Complete-UninstallLog
+}

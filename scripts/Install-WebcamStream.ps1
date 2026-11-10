@@ -36,6 +36,15 @@ if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction Sile
     $PSNativeCommandUseErrorActionPreference = $false
 }
 
+$script:InstallLogPath = Join-Path $PSScriptRoot "Install-WebcamStream.log"
+$script:InstallTranscript = $false
+
+function Write-InstallNote {
+    param([string]$Message)
+    $line = "{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $Message
+    try { Add-Content -LiteralPath $script:InstallLogPath -Value $line -Encoding UTF8 } catch { }
+}
+
 # PowerShell 7 and 32-bit Windows PowerShell cannot see the real firewall provider
 # or the 64-bit policy keys. Continue in the 64-bit Windows PowerShell 5.1 host.
 if (-not ([Environment]::Is64BitProcess -and $PSVersionTable.PSEdition -eq "Desktop")) {
@@ -54,9 +63,35 @@ if (-not ([Environment]::Is64BitProcess -and $PSVersionTable.PSEdition -eq "Desk
                 $forward += [string]$entry.Value
             }
         }
+        Write-InstallNote "This host is $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion) $([IntPtr]::Size * 8)-bit. Relaunching $hostExe."
         & $hostExe @forward
+        Write-InstallNote "Relaunched installer exited with code $LASTEXITCODE."
         exit $LASTEXITCODE
     }
+}
+
+try {
+    Start-Transcript -Path $script:InstallLogPath -Append -Force -IncludeInvocationHeader | Out-Null
+    $script:InstallTranscript = $true
+} catch {
+    Write-InstallNote "Could not start a transcript: $($_.Exception.Message)"
+}
+
+function Complete-InstallLog {
+    Write-Host "Install log: $script:InstallLogPath"
+    $copy = Join-Path $InstallDir "Install.log"
+    if ($script:InstallTranscript) {
+        try { Stop-Transcript | Out-Null } catch { }
+        $script:InstallTranscript = $false
+    }
+    if (-not (Test-Path -LiteralPath $script:InstallLogPath)) { return }
+    try {
+        $dir = Split-Path -Parent $copy
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        if ((Resolve-Path -LiteralPath $script:InstallLogPath).Path -ne $copy) {
+            Copy-Item -LiteralPath $script:InstallLogPath -Destination $copy -Force
+        }
+    } catch { }
 }
 
 function Find-Source {
@@ -131,6 +166,8 @@ function Invoke-Netsh {
     $p = [System.Diagnostics.Process]::Start($psi)
     $out = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
     $p.WaitForExit()
+    Write-Host "netsh $Arguments"
+    Write-Host "netsh exited $($p.ExitCode): $($out.Trim())"
     return @{ Code = $p.ExitCode; Output = $out.Trim() }
 }
 
@@ -391,6 +428,8 @@ function Invoke-ScResult {
     $p = [System.Diagnostics.Process]::Start($psi)
     $out = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
     $p.WaitForExit()
+    Write-Host "sc.exe $Arguments"
+    Write-Host "sc.exe exited $($p.ExitCode): $($out.Trim())"
     return [pscustomobject]@{ ExitCode = $p.ExitCode; Output = $out }
 }
 
@@ -494,6 +533,9 @@ function Set-WebcamServiceCommand {
             # A one-element PowerShell array is passed as a string. MultiString requires a string[].
             Set-RegistryMultiString $key "Environment" @("DOTNET_BUNDLE_EXTRACT_BASE_DIR=$bundle")
             $stored = [string]$key.GetValue("ImagePath")
+            $environment = [string[]]$key.GetValue("Environment")
+            Write-Host "Service command: $stored"
+            Write-Host ("Service environment: " + ($environment -join " | "))
             if ($stored -notlike "*--service*") {
                 throw "The WebcamStream service command line does not include --service. Windows would fail the start with error 1053."
             }
@@ -512,33 +554,56 @@ function Initialize-WebcamBundle {
     $psi.FileName = $Exe
     $psi.Arguments = "--version"
     $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $psi.EnvironmentVariables["DOTNET_BUNDLE_EXTRACT_BASE_DIR"] = $bundle
     $p = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $p.StandardOutput.ReadToEndAsync()
+    $stderr = $p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit(120000)) {
         try { $p.Kill() } catch { }
         throw "WebcamStream did not finish preparing within 2 minutes. Starting the service now would fail with error 1053."
     }
+    $p.WaitForExit()
+    $versionText = (($stdout.Result + $stderr.Result).Trim())
+    if ($versionText) { Write-Host $versionText }
+    Write-Host "WebcamStream --version exited $($p.ExitCode)."
     if ($p.ExitCode -ne 0) {
         throw "WebcamStream --version failed with exit code $($p.ExitCode)."
     }
     Grant-WebcamStreamAccess -Path $bundle -Container $true
 }
 
+try {
+Write-Host "WebcamStream installer"
+Write-Host ("Time: {0:yyyy-MM-dd HH:mm:ss zzz}" -f (Get-Date))
+Write-Host ("Windows: {0}" -f [Environment]::OSVersion.VersionString)
+Write-Host ("PowerShell: {0} {1} {2}-bit" -f $PSVersionTable.PSEdition, $PSVersionTable.PSVersion, ([IntPtr]::Size * 8))
+Write-Host ("User: {0}\{1}" -f $env:USERDOMAIN, $env:USERNAME)
+Write-Host ("Mode: {0}  Start: {1}" -f $Mode, [bool]$Start)
+Write-Host "Install directory: $InstallDir"
+if ($SourceDir) { Write-Host "SourceDir: $SourceDir" }
+
 $source = Find-Source $SourceDir
+Write-Host "Source: $source"
+Write-Host ("coreclr.dll beside the exe: {0}" -f (Test-Path -LiteralPath (Join-Path $source "coreclr.dll")))
 Test-FrameworkBuild $source
 Stop-ExistingWebcamStream
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Grant-WebcamStreamAccess -Path $InstallDir -Container $true
 # The .NET runtime files have to sit beside the exe. Packing them inside it
 # makes the service unpack them before it can answer Windows, which is error 1053.
+$copied = 0
 Get-ChildItem -LiteralPath $source -File | ForEach-Object {
-    if ($_.Extension -eq ".ps1") { return }
+    if ($_.Extension -eq ".ps1" -or $_.Extension -eq ".log") { return }
     if ($_.Name -eq "config.jsonc") { return }
     $dest = Join-Path $InstallDir $_.Name
     Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
     Unblock-File -LiteralPath $dest -ErrorAction SilentlyContinue
+    $copied++
 }
+Write-Host "Copied $copied files to $InstallDir."
 
 $config = Join-Path $InstallDir "config.jsonc"
 if (-not (Test-Path -LiteralPath $config)) {
@@ -626,3 +691,9 @@ if ($Start) {
 Write-Host "Config: $config"
 Write-Host "RTSP URL: rtsp://<this-pc>:$port/webcam"
 Write-Host "RTSP login is required. The defaults in config.jsonc are username webcam and password webcam1."
+} catch {
+    Write-Host ("INSTALL FAILED:`n" + ($_ | Out-String))
+    exit 1
+} finally {
+    Complete-InstallLog
+}
