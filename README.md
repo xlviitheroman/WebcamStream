@@ -34,6 +34,8 @@ The public repository is <https://github.com/xlviitheroman/WebcamStream>. The cu
 - <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.8/WebcamStream.exe>
 - <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.8/WebcamStream-win-x64.zip>
 
+Older releases are deleted when a new build is published. Use this zip.
+
 ## What you install, and where
 
 Everything lives in **`C:\ProgramData\WebcamStream`**.

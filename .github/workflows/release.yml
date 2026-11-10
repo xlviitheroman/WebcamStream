@@ -83,3 +83,9 @@ jobs:
               --notes "$notes" \
               --target "${{ github.sha }}"
           fi
+          # Keep only this build. Older releases were broken installs.
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | while read -r old; do
+            [ -z "$old" ] && continue
+            [ "$old" = "$tag" ] && continue
+            gh release delete "$old" --yes --cleanup-tag
+          done
