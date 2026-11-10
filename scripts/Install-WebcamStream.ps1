@@ -465,6 +465,50 @@ function Stop-ExistingWebcamStream {
     Get-Process -Name WebcamStream -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
+function Set-WebcamServiceCommand {
+    param([string]$Exe, [string]$Config)
+    $view = [Microsoft.Win32.RegistryView]::Registry64
+    $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $view)
+    try {
+        $key = $hklm.OpenSubKey("SYSTEM\CurrentControlSet\Services\WebcamStream", $true)
+        if ($null -eq $key) { throw "The WebcamStream service key was not created." }
+        try {
+            $image = '"' + $Exe + '" --service --config "' + $Config + '"'
+            $key.SetValue("ImagePath", $image, [Microsoft.Win32.RegistryValueKind]::String)
+            $bundle = Join-Path (Split-Path -Parent $Exe) "bundle"
+            $key.SetValue("Environment", @("DOTNET_BUNDLE_EXTRACT_BASE_DIR=$bundle"), [Microsoft.Win32.RegistryValueKind]::MultiString)
+            $stored = [string]$key.GetValue("ImagePath")
+            if ($stored -notlike "*--service*") {
+                throw "The WebcamStream service command line does not include --service. Windows would fail the start with error 1053."
+            }
+        } finally { $key.Dispose() }
+    } finally { $hklm.Dispose() }
+}
+
+function Initialize-WebcamBundle {
+    param([string]$Exe)
+    $bundle = Join-Path (Split-Path -Parent $Exe) "bundle"
+    New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+    Grant-WebcamStreamAccess -Path $bundle -Container $true
+    Unblock-File -LiteralPath $Exe -ErrorAction SilentlyContinue
+    Write-Host "Preparing the program files before the service starts."
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Exe
+    $psi.Arguments = "--version"
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["DOTNET_BUNDLE_EXTRACT_BASE_DIR"] = $bundle
+    $p = [System.Diagnostics.Process]::Start($psi)
+    if (-not $p.WaitForExit(120000)) {
+        try { $p.Kill() } catch { }
+        throw "WebcamStream did not finish preparing within 2 minutes. Starting the service now would fail with error 1053."
+    }
+    if ($p.ExitCode -ne 0) {
+        throw "WebcamStream --version failed with exit code $($p.ExitCode)."
+    }
+    Grant-WebcamStreamAccess -Path $bundle -Container $true
+}
+
 $source = Find-Source $SourceDir
 Test-FrameworkBuild $source
 Stop-ExistingWebcamStream
@@ -501,12 +545,16 @@ if ($Mode -eq "Service") {
     Write-Host "It runs as LocalSystem and opens the camera in the signed-in session."
     $task = Get-ScheduledTask -TaskName "WebcamStream" -ErrorAction SilentlyContinue
     if ($task) { Unregister-ScheduledTask -TaskName "WebcamStream" -Confirm:$false }
-    $bin = '"' + $exe + '" --service --config "' + $config + '"'
-    $quoted = $bin.Replace('"', '\"')
-    Invoke-Sc "create WebcamStream binPath= `"$quoted`" start= auto obj= LocalSystem DisplayName= `"WebcamStream`""
+    # sc.exe stores binPath with the backslashes from escaped quotes, so Windows
+    # never receives --service and the process exits without talking to the
+    # service manager. That wait is error 1053. Create the service with the exe
+    # path only, then write the real command line into ImagePath.
+    Invoke-Sc "create WebcamStream binPath= `"$exe`" start= auto obj= LocalSystem DisplayName= `"WebcamStream`""
+    Set-WebcamServiceCommand -Exe $exe -Config $config
     Invoke-Sc "description WebcamStream `"Webcam RTSP stream for recorders such as ExacqVision. Low CPU, no GPU.`""
     Invoke-Sc "failure WebcamStream reset= 86400 actions= restart/5000/restart/15000/restart/60000"
     Invoke-Sc "config WebcamStream start= auto"
+    Initialize-WebcamBundle -Exe $exe
     if ($Start) {
         Invoke-Sc "start WebcamStream"
         Write-Host "Service started. The camera is opening in the signed-in session now."

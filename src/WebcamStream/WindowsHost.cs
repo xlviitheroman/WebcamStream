@@ -12,13 +12,15 @@ sealed class WebcamStreamService : ServiceBase
     {
         ServiceName = "WebcamStream";
         CanStop = true;
-        AutoLog = true;
+        AutoLog = false;
     }
 
     public static string? ConfigPath { get; set; }
 
     protected override void OnStart(string[] args)
     {
+        try { RequestAdditionalTime(30000); } catch { }
+        Log.Info("Windows service is running. The camera opens in the signed-in session.");
         _supervisor = new StreamSupervisor(ConfigPath);
         _supervisor.Start();
     }
