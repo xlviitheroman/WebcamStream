@@ -25,14 +25,14 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-14aa55609d99292e453d2022b9444928790e6cea9b85cc5e809545f524460836  WebcamStream.exe
-bb5571d345206573e5eb9ca72224986518842d6a201d010af387ff6cfa8c980f  WebcamStream-win-x64.zip
+fd9107d0566eb68f042b7f07facc495e074dfdce64f6976e34d1053db5797577  WebcamStream.exe
+c4e65089267d6890c14b514e734be0d329814985013a61b963e8d04fbe3f3249  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.3**. `.github/workflows/release.yml` builds this exe on a Windows runner and attaches it to release **v1.0.3**. Those downloads are:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.4**. `.github/workflows/release.yml` builds this exe on a Windows runner and attaches it to release **v1.0.4**. Those downloads are:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.3/WebcamStream.exe>
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.3/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.4/WebcamStream.exe>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.4/WebcamStream-win-x64.zip>
 
 ## What you install, and where
 
@@ -92,7 +92,7 @@ Uninstall:
 .\Uninstall-WebcamStream.ps1 -Purge
 ```
 
-`-Purge` also deletes `C:\ProgramData\WebcamStream`, including the config.
+`-Purge` also deletes `C:\ProgramData\WebcamStream`, including the config. Uninstall turns off the service restart policy, stops WebcamStream, ends the process if it is stuck, and deletes the service. Close Services if that window is open, then run the uninstall again if the service is still listed.
 
 ## Try it before installing
 
@@ -209,7 +209,8 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | Installer stops with "Invalid class" or `reg.exe` cannot find a key | Use this copy of `Install-WebcamStream.ps1`. It opens the ports with `netsh` and writes the camera policy directly. Run it from an elevated PowerShell. |
 | Exacq never connects | Confirm the URL, port 554, and the firewall rules named WebcamStream RTSP and WebcamStream RTP. The log shows rejected addresses when the allow list is the reason. |
 | `0x80070005` or access denied | Close any other app that has the camera open. Run the installer again from an elevated PowerShell with `-Start`. It allows the camera, restarts the camera broker, and starts WebcamStream in the signed-in session. |
-| `--console` sits there and Windows marks it Suspended | That was the camera call blocking. 1.0.3 prints the refusal and exits within about 8 seconds. Close other camera apps, then run the installer with `-Start` before starting `--console` again. |
+| `--console` sits there and Windows marks it Suspended | That was the camera call blocking. 1.0.3 and later print the refusal and exit within about 8 seconds. Close other camera apps, then run the installer with `-Start` before starting `--console` again. |
+| Uninstall leaves the WebcamStream service | Use this `Uninstall-WebcamStream.ps1`. It turns off the service restart policy, stops WebcamStream, ends the process if Windows will not, and deletes the service. Close `services.msc` if it is open, then run the uninstall again. |
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |

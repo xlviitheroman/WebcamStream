@@ -372,26 +372,96 @@ function Grant-WebcamStreamAccess {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
-function Invoke-Sc {
+function Invoke-ScResult {
     param([string]$Arguments)
+    $sc = Join-Path $env:windir "System32\sc.exe"
+    if (-not [Environment]::Is64BitProcess) {
+        $native = Join-Path $env:windir "Sysnative\sc.exe"
+        if (Test-Path -LiteralPath $native) { $sc = $native }
+    }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "sc.exe"
+    $psi.FileName = $sc
     $psi.Arguments = $Arguments
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
     $p = [System.Diagnostics.Process]::Start($psi)
     $out = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
     $p.WaitForExit()
-    if ($p.ExitCode -ne 0 -and $out -notmatch "1060|1062") {
-        throw "sc.exe $Arguments failed ($($p.ExitCode)): $out"
+    return [pscustomobject]@{ ExitCode = $p.ExitCode; Output = $out }
+}
+
+function Invoke-Sc {
+    param([string]$Arguments)
+    $result = Invoke-ScResult $Arguments
+    if ($result.ExitCode -ne 0 -and $result.Output -notmatch "1060|1062") {
+        throw "sc.exe $Arguments failed ($($result.ExitCode)): $($result.Output)"
+    }
+}
+
+function Test-WebcamServiceGone {
+    param($Result)
+    return ($Result.ExitCode -ne 0 -and $Result.Output -match "1060")
+}
+
+function Remove-WebcamService {
+    $existing = Invoke-ScResult "query WebcamStream"
+    if (Test-WebcamServiceGone $existing) { return }
+
+    # The service is set to restart itself. Turn that off before killing the process,
+    # or Windows starts a new copy and the delete never sticks.
+    Invoke-ScResult "failureflag WebcamStream 0" | Out-Null
+    Invoke-ScResult "failure WebcamStream reset= 0 actions= `"`"" | Out-Null
+    Invoke-ScResult "config WebcamStream start= disabled" | Out-Null
+    Invoke-ScResult "stop WebcamStream" | Out-Null
+
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        Start-Sleep -Milliseconds 400
+        $query = Invoke-ScResult "query WebcamStream"
+        if (Test-WebcamServiceGone $query) { return }
+        if ($query.Output -match "STATE\s+:\s+1\b") { break }
+    } while ((Get-Date) -lt $deadline)
+
+    Get-Process -Name WebcamStream -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+
+    for ($try = 0; $try -lt 8; $try++) {
+        $deleted = Invoke-ScResult "delete WebcamStream"
+        if ($deleted.ExitCode -eq 0 -or (Test-WebcamServiceGone $deleted)) { break }
+        Get-Process -Name WebcamStream -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 700
+    }
+
+    $goneBy = (Get-Date).AddSeconds(5)
+    do {
+        $still = Invoke-ScResult "query WebcamStream"
+        if (Test-WebcamServiceGone $still) { return }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $goneBy)
+
+    Get-Process -Name WebcamStream -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+    $alive = Get-Process -Name WebcamStream -ErrorAction SilentlyContinue
+    if (-not $alive) {
+        foreach ($set in @("CurrentControlSet", "ControlSet001", "ControlSet002")) {
+            $key = "HKLM:\SYSTEM\$set\Services\WebcamStream"
+            if (Test-Path -LiteralPath $key) {
+                Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    $left = Invoke-ScResult "query WebcamStream"
+    if (-not (Test-WebcamServiceGone $left)) {
+        throw "The WebcamStream service is still registered. Close services.msc if it is open, then run this script again."
     }
 }
 
 function Stop-ExistingWebcamStream {
+    Remove-WebcamService
     Get-Process -Name WebcamStream -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Invoke-Sc "stop WebcamStream"
-    Start-Sleep -Seconds 1
 }
 
 $source = Find-Source $SourceDir
@@ -428,8 +498,6 @@ Enable-WebcamForAllUsers
 if ($Mode -eq "Service") {
     Write-Host "Installing the WebcamStream Windows service."
     Write-Host "It runs as LocalSystem and opens the camera in the signed-in session."
-    Invoke-Sc "delete WebcamStream"
-    Start-Sleep -Seconds 1
     $task = Get-ScheduledTask -TaskName "WebcamStream" -ErrorAction SilentlyContinue
     if ($task) { Unregister-ScheduledTask -TaskName "WebcamStream" -Confirm:$false }
     $bin = '"' + $exe + '" --service --config "' + $config + '"'
@@ -455,7 +523,6 @@ if (-not $User) {
 }
 Write-Host "Installing a scheduled task that runs at logon as $User."
 Write-Host "This runs in the signed-on session, which is what Windows requires to open the webcam."
-Invoke-Sc "delete WebcamStream"
 
 $action = New-ScheduledTaskAction -Execute $exe -Argument "--console --config `"$config`"" -WorkingDirectory $InstallDir
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $User
