@@ -465,6 +465,20 @@ function Stop-ExistingWebcamStream {
     Get-Process -Name WebcamStream -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
+function Set-RegistryMultiString {
+    param([Microsoft.Win32.RegistryKey]$Key, [string]$Name, [string[]]$Lines)
+    $values = New-Object string[] $Lines.Length
+    for ($i = 0; $i -lt $Lines.Length; $i++) { $values[$i] = [string]$Lines[$i] }
+    $method = [Microsoft.Win32.RegistryKey].GetMethod(
+        "SetValue",
+        [type[]]@([string], [object], [Microsoft.Win32.RegistryValueKind]))
+    $call = New-Object object[] 3
+    $call.SetValue($Name, 0)
+    $call.SetValue($values, 1)
+    $call.SetValue([Microsoft.Win32.RegistryValueKind]::MultiString, 2)
+    $method.Invoke($Key, $call) | Out-Null
+}
+
 function Set-WebcamServiceCommand {
     param([string]$Exe, [string]$Config)
     $view = [Microsoft.Win32.RegistryView]::Registry64
@@ -476,7 +490,8 @@ function Set-WebcamServiceCommand {
             $image = '"' + $Exe + '" --service --config "' + $Config + '"'
             $key.SetValue("ImagePath", $image, [Microsoft.Win32.RegistryValueKind]::String)
             $bundle = Join-Path (Split-Path -Parent $Exe) "bundle"
-            $key.SetValue("Environment", @("DOTNET_BUNDLE_EXTRACT_BASE_DIR=$bundle"), [Microsoft.Win32.RegistryValueKind]::MultiString)
+            # A one-element PowerShell array is passed as a string. MultiString requires a string[].
+            Set-RegistryMultiString $key "Environment" @("DOTNET_BUNDLE_EXTRACT_BASE_DIR=$bundle")
             $stored = [string]$key.GetValue("ImagePath")
             if ($stored -notlike "*--service*") {
                 throw "The WebcamStream service command line does not include --service. Windows would fail the start with error 1053."

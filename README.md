@@ -25,14 +25,14 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-1661e8d693c0cfa0c4ce8ed89a380c9108961cd385134e34ffa753611ae2395c  WebcamStream.exe
-2f998f30405544c0c908d97a36090b4a2c4c163bc5ba18eace75e39872c39f66  WebcamStream-win-x64.zip
+0f61c01c39f8d958b88fe406004fa361e8d6ab689979b2a36a8acd0a5faf1fbf  WebcamStream.exe
+6276c4858d1bc7bc8118e863180c8bc43c995ad57dce84ef79d2cc47d370be5f  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.7**. `.github/workflows/release.yml` builds this exe on a Windows runner and attaches it to release **v1.0.7**. Those downloads are:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.8**. `.github/workflows/release.yml` builds this exe on a Windows runner and attaches it to release **v1.0.8**. Those downloads are:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.7/WebcamStream.exe>
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.7/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.8/WebcamStream.exe>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.8/WebcamStream-win-x64.zip>
 
 ## What you install, and where
 
@@ -215,4 +215,5 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |
-| Service fails with error 1053 | The service command line was missing `--service`, so Windows waited and gave up. Use the 1.0.7 installer. It writes that command line and prepares the program files before it starts the service. |
+| Service fails with error 1053 | The service command line was missing `--service`, so Windows waited and gave up. Use the 1.0.8 installer. It writes that command line and prepares the program files before it starts the service. |
+| Installer stops on `SetValue` | 1.0.7 passed the service environment as a string. 1.0.8 writes it as a multi-string. Run that installer again. |
