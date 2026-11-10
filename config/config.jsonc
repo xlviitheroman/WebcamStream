@@ -1,0 +1,106 @@
+// WebcamStream
+//
+// This file lives at C:\ProgramData\WebcamStream\config.jsonc
+// The program reads it on startup. Save your edits, then restart the scheduled
+// task or the Windows service. The allow list is also re-read while running.
+//
+// Comments (these // lines, and /* block comments */) are allowed.
+//
+// What you get: this PC's webcam, published as an RTSP camera at
+//   rtsp://THIS-PC:554/webcam
+// ExacqVision (and most other NVRs) connect to that address. The stream is
+// 720p at 4 frames per second. When the camera can hand over JPEG frames
+// directly, they are forwarded as-is. Nothing is decoded and the GPU is not used.
+
+{
+  // IPv4 address to listen on. 0.0.0.0 means every network interface on this PC.
+  // This does not limit who may connect. Use "allow" for that.
+  "listenAddress": "0.0.0.0",
+
+  // TCP port for the RTSP control connection.
+  // 554 is the real RTSP port, and it is the port ExacqVision uses.
+  // 544 is not the RTSP port. Leave this at 554 unless some other program
+  // is already listening there.
+  "port": 554,
+
+  // Path in the RTSP URL. With the defaults, the camera address is
+  //   rtsp://THIS-PC:554/webcam
+  "path": "/webcam",
+
+  // Frames per second to send to the recorder.
+  // 3, 4, or 5 is the intended range. 4 is enough for a surveillance view
+  // and keeps CPU use low even on a 4th-generation Intel processor.
+  // Values above 8 start to cost more CPU and network, especially if the
+  // camera cannot provide MJPEG and each frame has to be compressed here.
+  "fps": 4,
+
+  // Picture size to ask the camera for. 1280x720 is 720p.
+  // Both numbers must be multiples of 16. 1280 and 720 already are.
+  // If the camera has no 720p mode, the closest MJPEG mode is used and the
+  // real size is written to the log. The stream is not scaled on the CPU.
+  "width": 1280,
+  "height": 720,
+
+  // JPEG quality from 1 to 95.
+  // Used only when the camera cannot deliver MJPEG and this program has to
+  // compress raw frames itself. MJPEG passthrough ignores this.
+  // Lower numbers are smaller and cheaper. 40 is a reasonable surveillance picture.
+  "jpegQuality": 40,
+
+  // Which camera to open. Leave this empty to use cameraIndex.
+  // Run:  WebcamStream.exe --list-cameras
+  // Then set this to part of the name that was printed, for example "C270".
+  "cameraName": "",
+
+  // Used when cameraName is empty. 0 is the first camera. -1 also means first.
+  "cameraIndex": -1,
+
+  // Who may open the stream.
+  // An empty list means any computer that can reach this port.
+  // Add one entry per line to lock it down. Each entry is one of:
+  //   an IPv4 or IPv6 address          "10.1.1.20"
+  //   a subnet in CIDR form            "192.168.1.0/24"
+  //   a subnet written with a mask     "10.0.0.0/255.255.0.0"
+  //   a hostname or FQDN               "exacq.office.example.com"
+  //     The name is resolved. The client IP must be one of those addresses.
+  //   a DNS suffix, with a leading dot ".office.example.com"
+  //     The client IP's reverse name must end in that suffix.
+  // Names are resolved again every allowRefreshSeconds.
+  // Remove the // in front of a line to enable that example.
+  "allow": [
+    // "192.168.1.0/24",
+    // "10.1.1.20",
+    // "exacq.office.example.com"
+  ],
+
+  // How often, in seconds, to resolve hostnames and FQDNs in "allow" again.
+  "allowRefreshSeconds": 60,
+
+  // How many recorders may watch at the same time. Exacq usually uses one.
+  "maxClients": 4,
+
+  // Optional RTSP username and password.
+  // Leave both empty and the stream will not ask for a password.
+  // If you set them, put the same values in the Exacq camera setup.
+  "username": "",
+  "password": "",
+
+  // UDP ports, used only when a recorder asks for RTP over UDP.
+  // TCP interleaved transport is preferred and only needs "port" above.
+  // rtpPortCount is the number of RTP/RTCP pairs. 8 pairs occupy
+  // 50000 through 50015. The installer opens this range in the firewall.
+  "rtpPortStart": 50000,
+  "rtpPortCount": 8,
+
+  // Log file. Empty means C:\ProgramData\WebcamStream\WebcamStream.log
+  "logPath": "",
+
+  // Write C:\ProgramData\WebcamStream\status.json every few seconds
+  // with the camera mode, frame rate, and connected clients.
+  "writeStatus": true,
+
+  // Stream a generated moving pattern instead of a camera.
+  // Leave false on the real PC. Set true to test the RTSP path before
+  // the camera is working, or on a machine with no webcam.
+  "testPattern": false
+}

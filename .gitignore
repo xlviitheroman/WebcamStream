@@ -1,0 +1,10 @@
+bin/
+obj/
+dist/
+!release/
+TestResults/
+.vs/
+*.user
+agent-tools/
+*.log
+status.json
