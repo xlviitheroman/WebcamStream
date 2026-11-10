@@ -9,6 +9,9 @@ static class Log
     static string? _path;
     static bool _shared;
 
+    internal static int MaxBytes = 1_000_000;
+    internal static int KeepFiles = 3;
+
     public static bool UseConsole { get; set; } = true;
 
     public static void ShareWithSignedInUsers(string path)
@@ -81,13 +84,11 @@ static class Log
             try
             {
                 var info = new FileInfo(_path);
-                var rotated = info.Exists && info.Length > 1_000_000;
-                if (rotated)
+                if (info.Exists && info.Length >= MaxBytes && TryRotate(_path))
                 {
-                    var backup = _path + ".1";
-                    File.Delete(backup);
-                    File.Move(_path, backup);
                     _shared = false;
+                    string rolled = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} info  Log rolled over. Older lines are in {Path.GetFileName(_path)}.1";
+                    File.AppendAllText(_path, rolled + Environment.NewLine);
                 }
                 File.AppendAllText(_path, line + Environment.NewLine);
                 if (!_shared)
@@ -100,6 +101,29 @@ static class Log
             {
                 // Logging must not take down the stream.
             }
+        }
+    }
+
+    static bool TryRotate(string path)
+    {
+        int keep = Math.Clamp(KeepFiles, 1, 8);
+        try
+        {
+            for (int i = keep; i >= 1; i--)
+            {
+                string src = i == 1 ? path : path + "." + (i - 1);
+                string dst = path + "." + i;
+                if (!File.Exists(src))
+                    continue;
+                if (File.Exists(dst))
+                    File.Delete(dst);
+                File.Move(src, dst);
+            }
+            return !File.Exists(path);
+        }
+        catch
+        {
+            return false;
         }
     }
 }

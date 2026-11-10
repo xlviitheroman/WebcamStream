@@ -73,7 +73,7 @@ jobs:
 
           WebcamStream.log reports pictures per second and whether the viewer is using UDP. If the camera JPEG cannot be shown, the program switches to software JPEG.
 
-          Exacq may DESCRIBE a URL with no /webcam path. That request is accepted. The RTSP session stays up while Exacq is recording. Digest login from Exacq is accepted, including the form that omits qop from the hash. Each request on a connection is written to the log. A connection that never starts playing is closed after 15 seconds of silence.
+          Exacq may DESCRIBE a URL with no /webcam path. That request is accepted. The RTSP session stays up while Exacq is recording. Digest login from Exacq is accepted, including the form that omits qop from the hash. Each request on a connection is written to the log. A connection that never starts playing is closed after 15 seconds of silence. WebcamStream.log rolls over at 1 MB and keeps three older files.
 
           To build from source instead, install the .NET 8 SDK (x64).
           A framework-dependent build needs the .NET 8 Runtime (x64), the package named ".NET Runtime", not the Desktop Runtime and not the ASP.NET Core Runtime. winget id: Microsoft.DotNet.Runtime.8

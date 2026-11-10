@@ -10,6 +10,44 @@ namespace WebcamStream.Tests;
 public class StreamTests
 {
     [Fact]
+    public void LogRollsOverWhenTheFileFills()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "webcamstream-log-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "WebcamStream.log");
+        int max = Log.MaxBytes;
+        int keep = Log.KeepFiles;
+        bool console = Log.UseConsole;
+        Log.MaxBytes = 50;
+        Log.KeepFiles = 2;
+        Log.UseConsole = false;
+        try
+        {
+            Log.SetPath(path);
+            Log.Info("entry-1 " + new string('x', 80));
+            Log.Info("entry-2 " + new string('y', 80));
+            Log.Info("entry-3 " + new string('z', 80));
+            string current = File.ReadAllText(path);
+            string previous = File.ReadAllText(path + ".1");
+            string oldest = File.ReadAllText(path + ".2");
+            Assert.Contains("entry-3", current);
+            Assert.Contains("Log rolled over", current);
+            Assert.Contains("entry-2", previous);
+            Assert.Contains("entry-1", oldest);
+            Assert.DoesNotContain("entry-1", current);
+            Assert.False(File.Exists(path + ".3"));
+        }
+        finally
+        {
+            Log.SetPath(null);
+            Log.MaxBytes = max;
+            Log.KeepFiles = keep;
+            Log.UseConsole = console;
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
     public void DefaultConfigKeepsCommentsAnd720p()
     {
         var path = Path.Combine(Path.GetTempPath(), "webcamstream-config-" + Guid.NewGuid().ToString("n") + ".jsonc");

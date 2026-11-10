@@ -25,12 +25,12 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-38216d0122446277844914090b1bff6aa980d184fc218db61ef0af25747ecca9  WebcamStream-win-x64.zip
+1c1dea370da60809decb395ec9d37d272d1227522315ede733cab2e4301fbaf4  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.14**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.14**:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.15**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.15**:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.14/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.15/WebcamStream-win-x64.zip>
 
 Unzip the whole folder and run the installer from there. `WebcamStream.exe` needs the files beside it, which is what lets the Windows service answer before Windows gives up with error 1053. Older releases are deleted when a new build is published.
 
@@ -42,7 +42,7 @@ Everything lives in **`C:\ProgramData\WebcamStream`**.
 | --- | --- |
 | `WebcamStream.exe` and the files beside it | The program and its runtime. This PC does not need .NET installed. The installer copies the whole set. |
 | `config.jsonc` | Settings, with comments. Created on install, and also the first time the program runs if the file is missing. |
-| `WebcamStream.log` | Log. Connections, the camera mode, and errors. Not every frame. |
+| `WebcamStream.log` | Log. Connections, the camera mode, and errors. Not every frame. At 1 MB it rolls to `WebcamStream.log.1`, `.2`, and `.3`. |
 | `Install.log` | What the installer did, including `sc.exe` output. The same text is written next to the script as `Install-WebcamStream.log`. |
 | `status.json` | Camera mode, measured frame rate, and how many clients are connected. |
 
