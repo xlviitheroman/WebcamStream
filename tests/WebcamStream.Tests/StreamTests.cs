@@ -26,6 +26,8 @@ public class StreamTests
             Assert.Equal(720, config.Height);
             Assert.Equal(4, config.Fps);
             Assert.Equal("0.0.0.0", config.ListenAddress);
+            Assert.Equal("webcam", config.Username);
+            Assert.Equal("webcam1", config.Password);
             Assert.Empty(config.Allow);
         }
         finally
@@ -142,13 +144,16 @@ public class StreamTests
         var stream = tcp.GetStream();
         var options = await Exchange(stream, "OPTIONS rtsp://127.0.0.1/webcam RTSP/1.0\r\nCSeq: 1\r\n\r\n");
         Assert.Contains("200", options);
-        var describe = await Exchange(stream, "DESCRIBE rtsp://127.0.0.1/webcam RTSP/1.0\r\nCSeq: 2\r\nAccept: application/sdp\r\n\r\n");
+        var refused = await Exchange(stream, "DESCRIBE rtsp://127.0.0.1/webcam RTSP/1.0\r\nCSeq: 2\r\nAccept: application/sdp\r\n\r\n");
+        Assert.Contains("401", refused);
+        Assert.Contains("WWW-Authenticate", refused);
+        var describe = await Exchange(stream, "DESCRIBE rtsp://127.0.0.1/webcam RTSP/1.0\r\nCSeq: 3\r\nAccept: application/sdp\r\nAuthorization: " + Basic("webcam", "webcam1") + "\r\n\r\n");
         Assert.Contains("JPEG/90000", describe);
         Assert.Contains("m=video", describe);
-        var setup = await Exchange(stream, "SETUP rtsp://127.0.0.1/webcam/track1 RTSP/1.0\r\nCSeq: 3\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n");
+        var setup = await Exchange(stream, "SETUP rtsp://127.0.0.1/webcam/track1 RTSP/1.0\r\nCSeq: 4\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\nAuthorization: " + Basic("webcam", "webcam1") + "\r\n\r\n");
         Assert.Contains("200", setup);
         Assert.Contains("interleaved=0-1", setup);
-        await WriteAscii(stream, "PLAY rtsp://127.0.0.1/webcam RTSP/1.0\r\nCSeq: 4\r\nSession: 1\r\n\r\n");
+        await WriteAscii(stream, "PLAY rtsp://127.0.0.1/webcam RTSP/1.0\r\nCSeq: 5\r\nSession: 1\r\nAuthorization: " + Basic("webcam", "webcam1") + "\r\n\r\n");
 
         var packets = await ReadRtpUntilMarker(stream, TimeSpan.FromSeconds(5));
         Assert.NotEmpty(packets);
@@ -158,6 +163,91 @@ public class StreamTests
         Assert.NotNull(parsed);
         Assert.Equal(320, parsed!.Width);
         Assert.Equal(240, parsed.Height);
+    }
+
+    [Fact]
+    public void BlankLoginFallsBackToTheDefaults()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "webcamstream-config-" + Guid.NewGuid().ToString("n") + ".jsonc");
+        try
+        {
+            File.WriteAllText(path, """{ "username": "", "password": "  ", "port": 8554 }""");
+            var config = AppConfig.Read(path);
+            Assert.Equal("webcam", config.Username);
+            Assert.Equal("webcam1", config.Password);
+            Assert.Equal(8554, config.Port);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task RtspAcceptsBasicDigestAndUrlLogin()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "webcamstream-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        var configPath = Path.Combine(dir, "config.jsonc");
+        await File.WriteAllTextAsync(configPath, """
+        {
+          "listenAddress": "127.0.0.1",
+          "port": 0,
+          "path": "/webcam",
+          "username": "nvr",
+          "password": "secret",
+          "writeStatus": false
+        }
+        """);
+        var config = AppConfig.Read(configPath);
+        var access = new AccessControl(_ => Array.Empty<IPAddress>(), _ => null);
+        access.Replace(Array.Empty<string>());
+        using var server = new RtspServer(config, access);
+        server.Start();
+
+        using var tcp = new TcpClient();
+        await tcp.ConnectAsync(IPAddress.Loopback, server.Port);
+        var stream = tcp.GetStream();
+        var challenge = await Exchange(stream, "DESCRIBE rtsp://127.0.0.1/webcam RTSP/1.0\r\nCSeq: 1\r\n\r\n");
+        Assert.Contains("401", challenge);
+        var nonce = Nonce(challenge);
+        var wrong = await Exchange(stream, "DESCRIBE rtsp://127.0.0.1/webcam RTSP/1.0\r\nCSeq: 2\r\nAuthorization: " + Basic("nvr", "nope") + "\r\n\r\n");
+        Assert.Contains("401", wrong);
+
+        var uri = "rtsp://127.0.0.1/webcam";
+        var digest = Digest("DESCRIBE", "nvr", "secret", uri, nonce);
+        var ok = await Exchange(stream, $"DESCRIBE {uri} RTSP/1.0\r\nCSeq: 3\r\nAuthorization: {digest}\r\n\r\n");
+        Assert.Contains("200", ok);
+        Assert.Contains("JPEG/90000", ok);
+
+        using var other = new TcpClient();
+        await other.ConnectAsync(IPAddress.Loopback, server.Port);
+        var urlLogin = await Exchange(other.GetStream(), "DESCRIBE rtsp://nvr:secret@127.0.0.1/webcam RTSP/1.0\r\nCSeq: 1\r\n\r\n");
+        Assert.Contains("200", urlLogin);
+    }
+
+    static string Basic(string user, string pass) =>
+        "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + pass));
+
+    static string Nonce(string challenge)
+    {
+        const string marker = "nonce=\"";
+        int start = challenge.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        Assert.True(start >= 0);
+        start += marker.Length;
+        int end = challenge.IndexOf('"', start);
+        return challenge[start..end];
+    }
+
+    static string Digest(string method, string user, string pass, string uri, string nonce)
+    {
+        string Md5(string text) => Convert.ToHexString(System.Security.Cryptography.MD5.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+        string ha1 = Md5($"{user}:WebcamStream:{pass}");
+        string ha2 = Md5($"{method}:{uri}");
+        string nc = "00000001";
+        string cnonce = "abc";
+        string response = Md5($"{ha1}:{nonce}:{nc}:{cnonce}:auth:{ha2}");
+        return $"Digest username=\"{user}\", realm=\"WebcamStream\", nonce=\"{nonce}\", uri=\"{uri}\", qop=auth, nc={nc}, cnonce=\"{cnonce}\", response=\"{response}\"";
     }
 
     static EncodedJpeg Solid(int width, int height, int quality, byte r, byte g, byte b)

@@ -15,6 +15,8 @@ sealed class RtspServer : IDisposable
     readonly object _clientsGate = new();
     readonly object _portGate = new();
     readonly HashSet<int> _usedRtpPorts = new();
+    readonly string _nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+    const string Realm = "WebcamStream";
     VideoFrame? _latest;
     int _frameSerial;
     Thread? _acceptThread;
@@ -220,10 +222,12 @@ sealed class RtspServer : IDisposable
             client.TimedOut = true;
         }
 
-        bool authed = string.IsNullOrEmpty(_config.Username) || method == "OPTIONS" || Authorized(headers);
+        bool authed = method == "OPTIONS" || Authorized(headers, url, method);
         if (!authed)
         {
-            Respond(client, cseq, 401, "Unauthorized", "WWW-Authenticate: Basic realm=\"WebcamStream\"\r\n");
+            Respond(client, cseq, 401, "Unauthorized",
+                $"WWW-Authenticate: Digest realm=\"{Realm}\", nonce=\"{_nonce}\", algorithm=MD5, qop=\"auth\"\r\n" +
+                $"WWW-Authenticate: Basic realm=\"{Realm}\"\r\n");
             return;
         }
 
@@ -465,21 +469,109 @@ sealed class RtspServer : IDisposable
         return $"rtsp://{local.Address}:{local.Port}{path}/";
     }
 
-    bool Authorized(Dictionary<string, string> headers)
+    bool Authorized(Dictionary<string, string> headers, string url, string method)
     {
-        if (!headers.TryGetValue("Authorization", out var value))
+        if (headers.TryGetValue("Authorization", out var value))
+        {
+            if (value.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
+                return BasicOk(value["Basic ".Length..].Trim());
+            if (value.StartsWith("Digest ", StringComparison.OrdinalIgnoreCase))
+                return DigestOk(value["Digest ".Length..], method);
             return false;
-        const string prefix = "Basic ";
-        if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            return false;
+        }
+        return UserInfoOk(url);
+    }
+
+    bool BasicOk(string token)
+    {
         string decoded;
-        try { decoded = Encoding.UTF8.GetString(Convert.FromBase64String(value[prefix.Length..].Trim())); }
+        try { decoded = Encoding.UTF8.GetString(Convert.FromBase64String(token)); }
         catch { return false; }
         int colon = decoded.IndexOf(':');
         if (colon < 0) return false;
-        var user = decoded[..colon];
-        var pass = decoded[(colon + 1)..];
-        return FixedEquals(user, _config.Username) && FixedEquals(pass, _config.Password);
+        return Credentials(decoded[..colon], decoded[(colon + 1)..]);
+    }
+
+    bool DigestOk(string value, string method)
+    {
+        var fields = ParseDigest(value);
+        if (!fields.TryGetValue("username", out var user)) return false;
+        if (!fields.TryGetValue("realm", out var realm) || !string.Equals(realm, Realm, StringComparison.Ordinal)) return false;
+        if (!fields.TryGetValue("nonce", out var nonce) || !FixedEquals(nonce, _nonce)) return false;
+        if (!fields.TryGetValue("uri", out var uri)) return false;
+        if (!fields.TryGetValue("response", out var response)) return false;
+        if (!FixedEquals(user, _config.Username)) return false;
+        string ha1 = Md5Hex($"{_config.Username}:{Realm}:{_config.Password}");
+        string ha2 = Md5Hex($"{method}:{uri}");
+        string expected;
+        if (fields.TryGetValue("qop", out var qop) && qop.Equals("auth", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!fields.TryGetValue("nc", out var nc) || !fields.TryGetValue("cnonce", out var cnonce))
+                return false;
+            expected = Md5Hex($"{ha1}:{_nonce}:{nc}:{cnonce}:{qop}:{ha2}");
+        }
+        else
+        {
+            expected = Md5Hex($"{ha1}:{_nonce}:{ha2}");
+        }
+        return FixedEquals(response, expected);
+    }
+
+    static Dictionary<string, string> ParseDigest(string value)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        int i = 0;
+        while (i < value.Length)
+        {
+            while (i < value.Length && (value[i] == ' ' || value[i] == ',')) i++;
+            if (i >= value.Length) break;
+            int eq = value.IndexOf('=', i);
+            if (eq < 0) break;
+            string key = value[i..eq].Trim();
+            i = eq + 1;
+            string item;
+            if (i < value.Length && value[i] == '"')
+            {
+                int end = value.IndexOf('"', i + 1);
+                if (end < 0) break;
+                item = value[(i + 1)..end];
+                i = end + 1;
+            }
+            else
+            {
+                int end = value.IndexOf(',', i);
+                if (end < 0) end = value.Length;
+                item = value[i..end].Trim();
+                i = end;
+            }
+            if (key.Length > 0) map[key] = item;
+        }
+        return map;
+    }
+
+    bool UserInfoOk(string url)
+    {
+        int scheme = url.IndexOf("://", StringComparison.Ordinal);
+        if (scheme < 0) return false;
+        int start = scheme + 3;
+        int at = url.IndexOf('@', start);
+        if (at < 0) return false;
+        int slash = url.IndexOf('/', start);
+        if (slash >= 0 && slash < at) return false;
+        var info = url[start..at];
+        int colon = info.IndexOf(':');
+        string user = Uri.UnescapeDataString(colon < 0 ? info : info[..colon]);
+        string pass = colon < 0 ? "" : Uri.UnescapeDataString(info[(colon + 1)..]);
+        return Credentials(user, pass);
+    }
+
+    bool Credentials(string user, string pass) =>
+        FixedEquals(user, _config.Username) && FixedEquals(pass, _config.Password);
+
+    static string Md5Hex(string text)
+    {
+        var hash = MD5.HashData(Encoding.UTF8.GetBytes(text));
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     static bool FixedEquals(string a, string b)

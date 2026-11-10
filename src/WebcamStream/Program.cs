@@ -96,6 +96,7 @@ static class Program
         using var server = new RtspServer(config, access.Access);
         server.Start();
         Log.Info($"Listening on rtsp://{config.ListenAddress}:{server.Port}{config.Path}");
+        Log.Info($"RTSP login is required. Username is {config.Username}.");
         foreach (var ip in LocalAddresses())
             Log.Info($"ExacqVision address: rtsp://{ip}:{server.Port}{config.Path}");
         Log.Info(access.Access.AllowAll
@@ -260,6 +261,9 @@ launches the camera after someone signs in.
 ExacqVision: Configure System, Add IP Cameras, New, Device Type RTSP,
 Hostname/IP Address:
   rtsp://THIS-PC:554/webcam
+Username and password are required. The defaults are webcam and webcam1.
+Put those in Exacq's username and password fields, or use:
+  rtsp://webcam:webcam1@THIS-PC:554/webcam
 
 .NET
   The release .exe is self-contained. Do not install a runtime to run it.

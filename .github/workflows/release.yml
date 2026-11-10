@@ -67,6 +67,7 @@ jobs:
 
           The program is installed to C:\ProgramData\WebcamStream.
           ExacqVision address: rtsp://THIS-PC:554/webcam
+          Username webcam, password webcam1, unless config.jsonc says otherwise.
 
           To build from source instead, install the .NET 8 SDK (x64).
           A framework-dependent build needs the .NET 8 Runtime (x64), the package named ".NET Runtime", not the Desktop Runtime and not the ASP.NET Core Runtime. winget id: Microsoft.DotNet.Runtime.8

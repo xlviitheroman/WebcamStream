@@ -7,7 +7,7 @@
 // Comments (these // lines, and /* block comments */) are allowed.
 //
 // What you get: this PC's webcam, published as an RTSP camera at
-//   rtsp://THIS-PC:554/webcam
+//   rtsp://webcam:webcam1@THIS-PC:554/webcam
 // ExacqVision (and most other NVRs) connect to that address. The stream is
 // 720p at 4 frames per second. When the camera can hand over JPEG frames
 // directly, they are forwarded as-is. Nothing is decoded and the GPU is not used.
@@ -24,7 +24,7 @@
   "port": 554,
 
   // Path in the RTSP URL. With the defaults, the camera address is
-  //   rtsp://THIS-PC:554/webcam
+  //   rtsp://webcam:webcam1@THIS-PC:554/webcam
   "path": "/webcam",
 
   // Frames per second to send to the recorder.
@@ -79,11 +79,12 @@
   // How many recorders may watch at the same time. Exacq usually uses one.
   "maxClients": 4,
 
-  // Optional RTSP username and password.
-  // Leave both empty and the stream will not ask for a password.
-  // If you set them, put the same values in the Exacq camera setup.
-  "username": "",
-  "password": "",
+  // Required RTSP username and password.
+  // A blank value is replaced with the default, so the stream always asks.
+  // Put the same values in the Exacq camera setup, or in the URL:
+  //   rtsp://webcam:webcam1@THIS-PC:554/webcam
+  "username": "webcam",
+  "password": "webcam1",
 
   // UDP ports, used only when a recorder asks for RTP over UDP.
   // TCP interleaved transport is preferred and only needs "port" above.

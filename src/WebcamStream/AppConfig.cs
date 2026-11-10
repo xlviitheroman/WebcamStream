@@ -17,8 +17,8 @@ sealed class AppConfig
     public string[] Allow { get; set; } = Array.Empty<string>();
     public int AllowRefreshSeconds { get; set; } = 60;
     public int MaxClients { get; set; } = 4;
-    public string Username { get; set; } = "";
-    public string Password { get; set; } = "";
+    public string Username { get; set; } = "webcam";
+    public string Password { get; set; } = "webcam1";
     public int RtpPortStart { get; set; } = 50000;
     public int RtpPortCount { get; set; } = 8;
     public string LogPath { get; set; } = "";
@@ -77,8 +77,10 @@ sealed class AppConfig
         RtpPortCount = Math.Clamp(RtpPortCount, 1, 64);
         Allow ??= Array.Empty<string>();
         CameraName ??= "";
-        Username ??= "";
-        Password ??= "";
+        if (string.IsNullOrWhiteSpace(Username))
+            Username = "webcam";
+        if (string.IsNullOrWhiteSpace(Password))
+            Password = "webcam1";
         LogPath ??= "";
         if (string.IsNullOrWhiteSpace(LogPath) && !string.IsNullOrEmpty(Directory))
             LogPath = System.IO.Path.Combine(Directory, "WebcamStream.log");

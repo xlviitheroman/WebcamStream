@@ -515,6 +515,7 @@ if ($Mode -eq "Service") {
     }
     Write-Host "Config: $config"
     Write-Host "RTSP URL: rtsp://<this-pc>:$port/webcam"
+    Write-Host "RTSP login is required. The defaults in config.jsonc are username webcam and password webcam1."
     return
 }
 
@@ -545,3 +546,4 @@ if ($Start) {
 }
 Write-Host "Config: $config"
 Write-Host "RTSP URL: rtsp://<this-pc>:$port/webcam"
+Write-Host "RTSP login is required. The defaults in config.jsonc are username webcam and password webcam1."
