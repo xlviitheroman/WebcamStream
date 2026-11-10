@@ -538,22 +538,25 @@ sealed class RtspServer : IDisposable
         var local = Unmap(((IPEndPoint)client.Tcp.Client.LocalEndPoint!).Address);
         var frame = _latest;
         int fps = Math.Clamp(_config.Fps, 1, 15);
+        // LIVE555 2016, which Exacq sends as its user agent, treats a=sendonly as a
+        // backchannel. It then finishes DESCRIBE and never sends SETUP. The lines
+        // below are the ones that client's own server advertises for a JPEG stream.
         return
             "v=0\r\n" +
-            $"o=- 0 1 IN IP4 {local}\r\n" +
+            $"o=- 1 1 IN IP4 {local}\r\n" +
             "s=WebcamStream\r\n" +
-            "i=720p webcam, a few frames per second, no re-encode when the camera offers MJPEG\r\n" +
+            "i=webcam\r\n" +
             "t=0 0\r\n" +
             "a=tool:WebcamStream\r\n" +
+            "a=type:broadcast\r\n" +
             "a=control:*\r\n" +
-            "a=range:npt=now-\r\n" +
+            "a=range:npt=0-\r\n" +
             "m=video 0 RTP/AVP 26\r\n" +
             "c=IN IP4 0.0.0.0\r\n" +
             "a=rtpmap:26 JPEG/90000\r\n" +
-            "a=sendonly\r\n" +
             $"a=framerate:{fps}\r\n" +
             "a=control:track1\r\n" +
-            (frame == null ? "" : $"a=x-dimensions:{frame.Width},{frame.Height}\r\n");
+            (frame == null ? "" : $"a=x-dimensions:{frame.Width} {frame.Height}\r\n");
     }
 
     bool Authorized(Dictionary<string, string> headers, string url, string method, out string why)
