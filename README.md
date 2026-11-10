@@ -25,12 +25,12 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-b731e514ccd66f061faebc6f0c8bb620fc79a4972562e381462db100a9cab827  WebcamStream-win-x64.zip
+38216d0122446277844914090b1bff6aa980d184fc218db61ef0af25747ecca9  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.13**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.13**:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.14**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.14**:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.13/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.14/WebcamStream-win-x64.zip>
 
 Unzip the whole folder and run the installer from there. `WebcamStream.exe` needs the files beside it, which is what lets the Windows service answer before Windows gives up with error 1053. Older releases are deleted when a new build is published.
 
@@ -210,7 +210,8 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | What you see | What to do |
 | --- | --- |
 | Installer stops with "Invalid class" or `reg.exe` cannot find a key | Use this copy of `Install-WebcamStream.ps1`. It opens the ports with `netsh` and writes the camera policy directly. Run it from an elevated PowerShell. |
-| Exacq says 401 Unauthorized | The path is accepted and the login was rejected. Put `webcam` and `webcam1` in Exacq's username and password fields. 1.0.13 accepts Exacq's digest login. `WebcamStream.log` names the username Exacq sent, or says that none was sent. |
+| Exacq shows several tries, but WebcamStream.log shows one connection | Those tries share one TCP connection. 1.0.14 writes a line for each request on it, including whether a password was sent. A connection that never starts playing is closed after 15 seconds of silence so Exacq can open the next one. |
+| Exacq says 401 Unauthorized | The path is accepted and the login was rejected. Put `webcam` and `webcam1` in Exacq's username and password fields. The log names the username Exacq sent, or says that none was sent. |
 | Exacq says DESCRIBE 404, connect timeout, or no RTSP session | 1.0.12 and later accept the path Exacq requests and keep the session while Exacq is recording. The log line `RTSP DESCRIBE` shows the URL Exacq used. |
 | `0x80070005` or access denied | Close any other app that has the camera open. Run the installer again from an elevated PowerShell with `-Start`. It allows the camera, restarts the camera broker, and starts WebcamStream in the signed-in session. |
 | `--console` sits there and Windows marks it Suspended | That was the camera call blocking. 1.0.3 and later print the refusal and exit within about 8 seconds. Close other camera apps, then run the installer with `-Start` before starting `--console` again. |

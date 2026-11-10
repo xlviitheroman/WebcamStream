@@ -351,6 +351,7 @@ public class StreamTests
           "path": "/webcam",
           "username": "nvr",
           "password": "secret",
+          "maxClients": 8,
           "writeStatus": false
         }
         """);
@@ -390,6 +391,32 @@ public class StreamTests
         await exacq.ConnectAsync(IPAddress.Loopback, server.Port);
         var legacyOk = await Exchange(exacq.GetStream(), $"DESCRIBE {legacyUri} RTSP/1.0\r\nCSeq: 1\r\nAuthorization: {legacy}\r\n\r\n");
         Assert.Contains("200", legacyOk);
+
+        string staleNonce = new string('a', 32);
+        string staleResponse = Md5($"{ha1}:{staleNonce}:{ha2}");
+        string staleHeader = $"Digest username=\"nvr\", realm=\"WebcamStream\", nonce=\"{staleNonce}\", uri=\"{legacyUri}\", response=\"{staleResponse}\"";
+        using var retry = new TcpClient();
+        await retry.ConnectAsync(IPAddress.Loopback, server.Port);
+        var retryStream = retry.GetStream();
+        var stale = await Exchange(retryStream, $"DESCRIBE {legacyUri} RTSP/1.0\r\nCSeq: 1\r\nAuthorization: {staleHeader}\r\n\r\n");
+        Assert.Contains("401", stale);
+        Assert.Contains("stale=\"true\"", stale);
+        string fresh = Digest("DESCRIBE", "nvr", "secret", legacyUri, Nonce(stale));
+        var retried = await Exchange(retryStream, $"DESCRIBE {legacyUri} RTSP/1.0\r\nCSeq: 2\r\nAuthorization: {fresh}\r\n\r\n");
+        Assert.Contains("200", retried);
+
+        using var folded = new TcpClient();
+        await folded.ConnectAsync(IPAddress.Loopback, server.Port);
+        string foldedDigest = Digest("DESCRIBE", "nvr", "secret", legacyUri, nonce);
+        int digestSpace = foldedDigest.IndexOf("uri=", StringComparison.Ordinal);
+        string foldedHeader = foldedDigest[..digestSpace] + "\r\n " + foldedDigest[digestSpace..];
+        var foldedOk = await Exchange(folded.GetStream(), $"DESCRIBE {legacyUri} RTSP/1.0\r\nCSeq: 1\r\nAuthorization: {foldedHeader}\r\n\r\n");
+        Assert.Contains("200", foldedOk);
+
+        using var lineFeed = new TcpClient();
+        await lineFeed.ConnectAsync(IPAddress.Loopback, server.Port);
+        var lineFeedOk = await Exchange(lineFeed.GetStream(), "DESCRIBE rtsp://nvr:secret@127.0.0.1/webcam RTSP/1.0\nCSeq: 1\n\n");
+        Assert.Contains("200", lineFeedOk);
     }
 
     static string Basic(string user, string pass) =>

@@ -75,7 +75,7 @@ sealed class RtspServer : IDisposable
                 var client = new Client(tcp, remote);
                 lock (_clientsGate) _clients.Add(client);
                 Interlocked.Increment(ref _clientCount);
-                Log.Info($"Client connected from {remote.Address}");
+                Log.Info($"Client connected from {remote.Address}:{remote.Port}");
                 var thread = new Thread(() => ClientLoop(client)) { IsBackground = true, Name = "rtsp-client" };
                 thread.Start();
             }
@@ -153,12 +153,15 @@ sealed class RtspServer : IDisposable
                 try { first = stream.ReadByte(); }
                 catch (IOException)
                 {
-                    // A recorder such as Exacq keeps the RTSP connection quiet while it
-                    // records. Dropping it at 60 seconds is the "media session timeout"
-                    // and the following PLAY with no session. A playing viewer stays up
-                    // until it closes the connection or sends TEARDOWN.
-                    if (!client.Playing && DateTime.UtcNow - client.LastActivity > TimeSpan.FromMinutes(10))
+                    // A recorder that is already playing keeps this socket quiet between
+                    // pictures. That socket stays up. A socket that never reached PLAY
+                    // is only the login attempt. Holding it for minutes is why Exacq's
+                    // log shows one connection and then stops opening another.
+                    if (!client.Playing && DateTime.UtcNow - client.LastActivity > TimeSpan.FromSeconds(15))
+                    {
+                        client.QuietTimeout = true;
                         break;
+                    }
                     continue;
                 }
                 if (first < 0) break;
@@ -189,14 +192,14 @@ sealed class RtspServer : IDisposable
 
     void Handle(Client client, NetworkStream stream, string text)
     {
-        var lines = text.Split("\r\n");
-        if (lines.Length == 0) return;
+        var lines = Unfold(text);
+        if (lines.Count == 0) return;
         var parts = lines[0].Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 2) return;
         string method = parts[0].ToUpperInvariant();
         string url = parts[1];
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        for (int i = 1; i < lines.Length; i++)
+        for (int i = 1; i < lines.Count; i++)
         {
             int colon = lines[i].IndexOf(':');
             if (colon <= 0) continue;
@@ -204,6 +207,13 @@ sealed class RtspServer : IDisposable
         }
         headers.TryGetValue("CSeq", out var cseq);
         cseq ??= "0";
+        client.Requests++;
+        client.LastMethod = method;
+        client.SentCredentials |= headers.ContainsKey("Authorization") || UrlHasUserInfo(url);
+        if (client.Requests == 1 && headers.TryGetValue("User-Agent", out var agent) && agent.Length > 0)
+            Log.Info($"Recorder at {client.Remote.Address}:{client.Remote.Port} identifies as {Shown(agent)}.");
+        string login = AuthNote(headers, url);
+        Log.Info($"RTSP {method} from {client.Remote.Address}:{client.Remote.Port} cseq {cseq}, {login}, url {Redact(url)}");
         if (headers.TryGetValue("Content-Length", out var lenText) && int.TryParse(lenText, out var len) && len > 0)
         {
             var sink = new byte[Math.Min(len, 65536)];
@@ -220,11 +230,14 @@ sealed class RtspServer : IDisposable
         bool authed = method == "OPTIONS" || Authorized(headers, url, method, out why);
         if (!authed)
         {
-            Log.Info($"RTSP {method} from {client.Remote.Address} was rejected: {why}.");
-            // qop is omitted on purpose. Exacq answers qop with a digest that does not
-            // include qop, so advertising it makes every DESCRIBE come back 401.
+            bool staleNonce = why == "digest nonce was not the one this server sent";
+            string stale = staleNonce ? ", stale=\"true\"" : "";
+            Log.Info($"Answered 401 to {method} from {client.Remote.Address}:{client.Remote.Port}: {why}.");
+            // qop is advertised, and a response that ignores qop is still accepted.
+            // Some recorders require qop in the challenge before they will answer.
+            // Others answer qop with a hash that leaves qop out.
             Respond(client, cseq, 401, "Unauthorized",
-                $"WWW-Authenticate: Digest realm=\"{Realm}\", nonce=\"{_nonce}\", algorithm=\"MD5\"\r\n" +
+                $"WWW-Authenticate: Digest realm=\"{Realm}\", nonce=\"{_nonce}\", algorithm=\"MD5\", qop=\"auth\"{stale}\r\n" +
                 $"WWW-Authenticate: Basic realm=\"{Realm}\"\r\n");
             return;
         }
@@ -236,7 +249,7 @@ sealed class RtspServer : IDisposable
                 break;
             case "DESCRIBE":
                 RememberPresentation(client, url, headers);
-                Log.Info($"RTSP DESCRIBE {url}");
+                Log.Info($"RTSP DESCRIBE {Redact(url)}");
                 var sdp = BuildSdp(client);
                 var body = Encoding.ASCII.GetBytes(sdp);
                 var extra = $"Content-Type: application/sdp\r\nContent-Base: {client.PresentationUrl}\r\nContent-Length: {body.Length}\r\n";
@@ -244,7 +257,7 @@ sealed class RtspServer : IDisposable
                 break;
             case "SETUP":
                 RememberPresentation(client, url, headers);
-                Log.Info($"RTSP SETUP {url}");
+                Log.Info($"RTSP SETUP {Redact(url)}");
                 if (!headers.TryGetValue("Transport", out var transport))
                 {
                     Respond(client, cseq, 400, "Bad Request", "");
@@ -259,7 +272,7 @@ sealed class RtspServer : IDisposable
                 client.Paused = false;
                 Respond(client, cseq, 200, "OK",
                     $"Session: {client.SessionId};timeout=600\r\nRange: npt=0.000-\r\nRTP-Info: url={client.PresentationUrl}track1;seq={client.Sequence};rtptime={client.Timestamp}\r\n");
-                Log.Info($"RTSP PLAY {url}");
+                Log.Info($"RTSP PLAY {Redact(url)}");
                 break;
             case "PAUSE":
                 client.Playing = false;
@@ -555,7 +568,7 @@ sealed class RtspServer : IDisposable
             }
             if (value.StartsWith("Digest ", StringComparison.OrdinalIgnoreCase))
             {
-                if (DigestOk(value["Digest ".Length..], method, out why)) return true;
+                if (DigestOk(value["Digest ".Length..], method, url, out why)) return true;
                 return false;
             }
             why = "authorization was not Basic or Digest";
@@ -591,7 +604,7 @@ sealed class RtspServer : IDisposable
         return true;
     }
 
-    bool DigestOk(string value, string method, out string why)
+    bool DigestOk(string value, string method, string requestUrl, out string why)
     {
         why = "digest login could not be read";
         var fields = ParseDigest(value);
@@ -619,19 +632,31 @@ sealed class RtspServer : IDisposable
         if (fields.TryGetValue("algorithm", out var algorithm) && algorithm.Equals("MD5-sess", StringComparison.OrdinalIgnoreCase)
             && fields.TryGetValue("cnonce", out var sessNonce))
             ha1 = Md5Hex($"{ha1}:{_nonce}:{sessNonce}");
-        string ha2 = Md5Hex($"{method}:{uri}");
-        var expected = new List<string> { Md5Hex($"{ha1}:{_nonce}:{ha2}") };
-        if (fields.TryGetValue("nc", out var nc) && fields.TryGetValue("cnonce", out var cnonce))
+        var uris = new List<string>();
+        void AddUri(string candidate)
         {
-            string qop = "auth";
-            if (fields.TryGetValue("qop", out var sent) && sent.Length > 0)
-                qop = sent.Split(',')[0].Trim();
-            if (qop.Equals("auth", StringComparison.OrdinalIgnoreCase))
-                expected.Add(Md5Hex($"{ha1}:{_nonce}:{nc}:{cnonce}:{qop}:{ha2}"));
+            candidate = candidate.Trim();
+            if (candidate.Length == 0) return;
+            if (uris.Exists(item => item.Equals(candidate, StringComparison.Ordinal))) return;
+            uris.Add(candidate);
         }
-        foreach (var hash in expected)
+        AddUri(uri);
+        AddUri(uri.TrimEnd('/'));
+        AddUri(uri.EndsWith('/') ? uri : uri + "/");
+        AddUri(Redact(requestUrl));
+        fields.TryGetValue("nc", out var nc);
+        fields.TryGetValue("cnonce", out var cnonce);
+        bool haveNc = !string.IsNullOrEmpty(nc) && !string.IsNullOrEmpty(cnonce);
+        string qop = "auth";
+        if (fields.TryGetValue("qop", out var sent) && sent.Length > 0)
+            qop = sent.Split(',')[0].Trim();
+        foreach (var candidate in uris)
         {
-            if (HexEquals(response.Trim(), hash)) return true;
+            string ha2 = Md5Hex($"{method}:{candidate}");
+            if (HexEquals(response.Trim(), Md5Hex($"{ha1}:{_nonce}:{ha2}"))) return true;
+            if (haveNc && qop.Equals("auth", StringComparison.OrdinalIgnoreCase)
+                && HexEquals(response.Trim(), Md5Hex($"{ha1}:{_nonce}:{nc}:{cnonce}:{qop}:{ha2}")))
+                return true;
         }
         why = "digest password was not accepted";
         return false;
@@ -720,6 +745,7 @@ sealed class RtspServer : IDisposable
 
     void Respond(Client client, string cseq, int code, string reason, string extra, byte[]? body = null)
     {
+        client.LastStatus = code;
         var head = $"RTSP/1.0 {code} {reason}\r\nCSeq: {cseq}\r\nServer: WebcamStream\r\n{extra}\r\n";
         var bytes = Encoding.ASCII.GetBytes(head);
         lock (client.WriteLock)
@@ -728,7 +754,78 @@ sealed class RtspServer : IDisposable
             stream.Write(bytes, 0, bytes.Length);
             if (body != null && body.Length > 0)
                 stream.Write(body, 0, body.Length);
+            stream.Flush();
         }
+        if (code != 401)
+            Log.Info($"Answered {code} {reason} to cseq {cseq} from {client.Remote.Address}:{client.Remote.Port}.");
+    }
+
+    static List<string> Unfold(string text)
+    {
+        var raw = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var lines = new List<string>();
+        foreach (var piece in raw)
+        {
+            if (piece.Length > 0 && (piece[0] == ' ' || piece[0] == '\t') && lines.Count > 0)
+                lines[^1] += " " + piece.Trim();
+            else
+                lines.Add(piece);
+        }
+        return lines;
+    }
+
+    static string AuthNote(Dictionary<string, string> headers, string url)
+    {
+        if (headers.TryGetValue("Authorization", out var value))
+        {
+            if (value.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    string decoded = Encoding.UTF8.GetString(Convert.FromBase64String(value["Basic ".Length..].Trim()));
+                    int colon = decoded.IndexOf(':');
+                    string user = colon < 0 ? decoded : decoded[..colon];
+                    return $"basic user \"{Shown(user.Trim())}\"";
+                }
+                catch
+                {
+                    return "basic login could not be read";
+                }
+            }
+            if (value.StartsWith("Digest ", StringComparison.OrdinalIgnoreCase))
+            {
+                var fields = ParseDigest(value["Digest ".Length..]);
+                fields.TryGetValue("username", out var user);
+                string qop = fields.ContainsKey("qop") ? "with qop" : "without qop";
+                return $"digest user \"{Shown(user ?? "")}\", {qop}";
+            }
+            return "unrecognized login";
+        }
+        if (UrlHasUserInfo(url)) return "username in the URL";
+        return "no login";
+    }
+
+    static bool UrlHasUserInfo(string url)
+    {
+        int scheme = url.IndexOf("://", StringComparison.Ordinal);
+        if (scheme < 0) return false;
+        int start = scheme + 3;
+        int at = url.IndexOf('@', start);
+        if (at < 0) return false;
+        int slash = url.IndexOf('/', start);
+        return slash < 0 || slash > at;
+    }
+
+    static string Redact(string url)
+    {
+        int scheme = url.IndexOf("://", StringComparison.Ordinal);
+        if (scheme < 0) return url;
+        int start = scheme + 3;
+        int at = url.IndexOf('@', start);
+        if (at < 0) return url;
+        int slash = url.IndexOf('/', start);
+        if (slash >= 0 && slash < at) return url;
+        return url[..start] + url[(at + 1)..];
     }
 
     static void SendRaw(NetworkStream stream, string text)
@@ -746,8 +843,10 @@ sealed class RtspServer : IDisposable
             if (b < 0) return null;
             buf.Add((byte)b);
             int n = buf.Count;
-            if (n >= 4 && buf[n - 4] == '\r' && buf[n - 3] == '\n' && buf[n - 2] == '\r' && buf[n - 1] == '\n')
-                return Encoding.ASCII.GetString(buf.ToArray(), 0, n - 4);
+            bool crlf = n >= 4 && buf[n - 4] == '\r' && buf[n - 3] == '\n' && buf[n - 2] == '\r' && buf[n - 1] == '\n';
+            bool lf = n >= 2 && buf[n - 1] == '\n' && buf[n - 2] == '\n';
+            if (crlf || lf)
+                return Encoding.ASCII.GetString(buf.ToArray(), 0, n - (crlf ? 4 : 2));
         }
         return null;
     }
@@ -773,6 +872,25 @@ sealed class RtspServer : IDisposable
 
     static string NewSession() => Convert.ToHexString(RandomNumberGenerator.GetBytes(8));
 
+    static string Farewell(Client client)
+    {
+        if (client.Requests == 0)
+            return client.QuietTimeout
+                ? "It connected and sent no RTSP request before the connection was closed."
+                : "It connected and sent no RTSP request.";
+        string last = $"The last was {client.LastMethod} answered {client.LastStatus}.";
+        string count = client.Requests == 1 ? "1 request" : $"{client.Requests} requests";
+        if (client.QuietTimeout && !client.Playing)
+            return $"It sent {count} and then sat quiet, so the connection was closed. {last} It never started playing.";
+        if (client.LastStatus == 401 && !client.SentCredentials)
+            return $"It sent {count}. {last} No username or password was sent.";
+        if (client.LastStatus == 401)
+            return $"It sent {count}. {last} The login was rejected.";
+        if (!client.Playing)
+            return $"It sent {count}. {last} It never started playing.";
+        return $"It sent {count}. {last}";
+    }
+
     void CloseClient(Client client)
     {
         if (client.Closed) return;
@@ -790,7 +908,7 @@ sealed class RtspServer : IDisposable
         if (removed)
         {
             Interlocked.Decrement(ref _clientCount);
-            Log.Info($"Client disconnected {client.Remote.Address}");
+            Log.Info($"Client disconnected {client.Remote.Address}:{client.Remote.Port}. {Farewell(client)}");
         }
     }
 
@@ -839,6 +957,11 @@ sealed class RtspServer : IDisposable
         public uint Packets;
         public uint Octets;
         public DateTime LastActivity;
+        public int Requests;
+        public string LastMethod = "";
+        public int LastStatus;
+        public bool SentCredentials;
+        public bool QuietTimeout;
 
         public void Touch() => LastActivity = DateTime.UtcNow;
     }
