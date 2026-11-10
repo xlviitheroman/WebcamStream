@@ -126,7 +126,15 @@ public class StreamTests
         var restarted = JpegCodec.BuildContainer(parsed.Width, parsed.Height, 1, 16, parsed.LumaQuant, parsed.ChromaQuant, parsed.Scan);
         var withRestart = JpegCodec.TryParse(restarted);
         Assert.NotNull(withRestart);
-        Assert.False(withRestart!.RecorderCanPlay);
+        Assert.True(withRestart!.RecorderCanPlay);
+        Assert.Equal(16, withRestart.RestartInterval);
+        var restartedFrame = RtpJpeg.Packetize(withRestart, 1, "test", maxPayload: 500);
+        Assert.Equal(65, restartedFrame.Slices[0].Payload[4]);
+        Assert.Equal(0, restartedFrame.Slices[0].Payload[8]);
+        Assert.Equal(16, restartedFrame.Slices[0].Payload[9]);
+        var restartedScan = Reassemble(restartedFrame, out _, out _, out _, out _, out int restartedType);
+        Assert.Equal(1, restartedType & 63);
+        Assert.Equal(withRestart.Scan, restartedScan);
 
         var oneTable = RemoveSecondQuantTable(jpeg.Container);
         var shared = JpegCodec.TryParse(oneTable);

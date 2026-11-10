@@ -80,6 +80,7 @@ static class MediaFoundationCapture
         var interval = TimeSpan.FromSeconds(1.0 / Math.Clamp(config.Fps, 1, 15));
         var next = DateTime.UtcNow;
         int rejected = 0;
+        bool toldRestart = false;
         while (!token.IsCancellationRequested)
         {
             int hr = ReadSampleWithin(camera, TimeSpan.FromSeconds(8), out int flags, out IntPtr samplePtr);
@@ -121,9 +122,7 @@ static class MediaFoundationCapture
                                     ? "its color format is not 4:2:0 or 4:2:2"
                                     : !jpeg.StandardHuffman
                                         ? "it uses Huffman tables recorders cannot decode"
-                                        : jpeg.RestartInterval > 0
-                                            ? "it uses restart markers recorders often will not show"
-                                            : "its size cannot be carried in this stream";
+                                : "its size cannot be carried in this stream";
                             if (jpeg == null && rejected < 4)
                             {
                                 if (rejected == 1)
@@ -161,7 +160,14 @@ static class MediaFoundationCapture
                         label = "rgb-jpeg";
                     }
                     if (jpeg != null && jpeg.Supported && jpeg.Scan.Length > 0)
+                    {
+                        if (passthrough && jpeg.RestartInterval > 0 && !toldRestart)
+                        {
+                            toldRestart = true;
+                            Log.Info($"The camera JPEG uses restart markers. Sending that JPEG unchanged, which keeps CPU use low.");
+                        }
                         onFrame(jpeg, $"{label} {jpeg.Width}x{jpeg.Height}");
+                    }
                 }
                 finally
                 {

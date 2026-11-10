@@ -16,7 +16,7 @@ sealed class EncodedJpeg
     public bool RecorderCanPlay =>
         Supported
         && StandardHuffman
-        && RestartInterval == 0
+        && RestartInterval is >= 0 and <= 65535
         && Scan.Length > 0
         && Width >= 16
         && Height >= 16

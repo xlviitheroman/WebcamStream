@@ -25,12 +25,12 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-49b1638b76aa52d632455d7ed3d098b977e20dec5b7d187ab4e845a1329afc9c  WebcamStream-win-x64.zip
+599ed023545c71cfe2f2b3770e52c67a59aaaf1b92bc90923487d995b5775160  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.18**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.18**:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.19**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.19**:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.18/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.19/WebcamStream-win-x64.zip>
 
 Unzip the whole folder and run the installer from there. `WebcamStream.exe` needs the files beside it, which is what lets the Windows service answer before Windows gives up with error 1053. Older releases are deleted when a new build is published.
 
@@ -221,6 +221,7 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | Uninstall leaves the WebcamStream service | Use this `Uninstall-WebcamStream.ps1`. It turns off the service restart policy, stops WebcamStream, ends the process if Windows will not, and deletes the service. Close `services.msc` if it is open, then run the uninstall again. |
 | Camera privacy switches are Off and say managed by policy | Installers through 1.0.4 stored `LetAppsAccessCamera` as `2`, which Windows treats as Force Deny. 1.0.5 stores `1`, Force Allow. Run that installer again. The switches stay managed, and they show On. |
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
+| Log says switching to software JPEG from YUY2, and CPU stays near 10% | The camera JPEG had restart markers, and 1.0.18 re-encoded every frame. 1.0.19 sends that JPEG unchanged. The picture line should say `mjpeg-passthrough`. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |
 | The viewer connects and the camera light is on, but the picture stays blank | Open `C:\ProgramData\WebcamStream\WebcamStream.log`. Every few seconds it reports pictures/sec and whether the viewer is on UDP or inside the RTSP connection. 1.0.11 switches to software JPEG when the camera's own JPEG is something a recorder will not show. Use the 1.0.11 zip. |
