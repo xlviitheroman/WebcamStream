@@ -25,14 +25,14 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-fd9107d0566eb68f042b7f07facc495e074dfdce64f6976e34d1053db5797577  WebcamStream.exe
-c4e65089267d6890c14b514e734be0d329814985013a61b963e8d04fbe3f3249  WebcamStream-win-x64.zip
+fadd6c70f0abb8a46b3c00d62fe6f863bebb7d9f23c804f9af6026bba3984122  WebcamStream.exe
+cefb80c43e9f056c6eb558edf0fc469d9c5f3fe356b96e7a16d6826dcfc7f67c  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.4**. `.github/workflows/release.yml` builds this exe on a Windows runner and attaches it to release **v1.0.4**. Those downloads are:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.5**. `.github/workflows/release.yml` builds this exe on a Windows runner and attaches it to release **v1.0.5**. Those downloads are:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.4/WebcamStream.exe>
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.4/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.5/WebcamStream.exe>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.5/WebcamStream-win-x64.zip>
 
 ## What you install, and where
 
@@ -178,7 +178,7 @@ It writes these values through the 64-bit registry API. `reg.exe` is not used, b
 
 | Key | Value | What it does |
 | --- | --- | --- |
-| `HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy` | `LetAppsAccessCamera` = `2` | Forces Windows apps to allow the camera. Any per-app deny list is removed. |
+| `HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy` | `LetAppsAccessCamera` = `1` | Forces Windows apps to allow the camera. `2` is Force Deny and is what turns the Privacy page Off. Any per-app deny list is removed. |
 | `HKLM\SOFTWARE\Policies\Microsoft\Camera` | `AllowCamera` = `1` | Keeps the camera device enabled for the PC. |
 | `...\CapabilityAccessManager\ConsentStore\webcam` | `Value` = `Allow` | Turns camera access on. |
 | `...\ConsentStore\webcam\NonPackaged` | `Value` = `Allow` | Lets desktop apps, including WebcamStream, open the camera. |
@@ -211,6 +211,7 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | `0x80070005` or access denied | Close any other app that has the camera open. Run the installer again from an elevated PowerShell with `-Start`. It allows the camera, restarts the camera broker, and starts WebcamStream in the signed-in session. |
 | `--console` sits there and Windows marks it Suspended | That was the camera call blocking. 1.0.3 and later print the refusal and exit within about 8 seconds. Close other camera apps, then run the installer with `-Start` before starting `--console` again. |
 | Uninstall leaves the WebcamStream service | Use this `Uninstall-WebcamStream.ps1`. It turns off the service restart policy, stops WebcamStream, ends the process if Windows will not, and deletes the service. Close `services.msc` if it is open, then run the uninstall again. |
+| Camera privacy switches are Off and say managed by policy | Installers through 1.0.4 stored `LetAppsAccessCamera` as `2`, which Windows treats as Force Deny. 1.0.5 stores `1`, Force Allow. Run that installer again. The switches stay managed, and they show On. |
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |

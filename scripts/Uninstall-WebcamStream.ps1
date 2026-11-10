@@ -153,7 +153,25 @@ function Remove-WebcamService {
     }
 }
 
+function Repair-DeniedCameraPolicy {
+    # Installers through 1.0.4 wrote LetAppsAccessCamera = 2. That value is Force Deny.
+    $view = [Microsoft.Win32.RegistryView]::Registry64
+    $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $view)
+    try {
+        $key = $hklm.OpenSubKey("SOFTWARE\Policies\Microsoft\Windows\AppPrivacy", $true)
+        if ($null -eq $key) { return }
+        try {
+            $current = $key.GetValue("LetAppsAccessCamera")
+            if ($current -eq 2) {
+                $key.SetValue("LetAppsAccessCamera", 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+                Write-Host "Corrected the camera policy from Force Deny to Force Allow."
+            }
+        } finally { $key.Dispose() }
+    } finally { $hklm.Dispose() }
+}
+
 Remove-WebcamService
+Repair-DeniedCameraPolicy
 $task = Get-ScheduledTask -TaskName "WebcamStream" -ErrorAction SilentlyContinue
 if ($task) { Unregister-ScheduledTask -TaskName "WebcamStream" -Confirm:$false }
 foreach ($name in @("WebcamStream RTSP", "WebcamStream RTP", "WebcamStream-RTSP-TCP", "WebcamStream-RTP-UDP")) {

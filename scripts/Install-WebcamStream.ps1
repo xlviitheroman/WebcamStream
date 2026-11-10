@@ -243,8 +243,9 @@ namespace WebcamStream {
         }
     }
 
-    # 2 is Force Allow. 0 leaves the choice to each user, and 1 forces the camera off.
-    Set-RegDword $hklm "SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessCamera" 2
+    # Microsoft defines 0 as user control, 1 as Force Allow, and 2 as Force Deny.
+    # 2 is what makes Settings show the camera switches Off and "managed by policy".
+    Set-RegDword $hklm "SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessCamera" 1
     $privacy = $hklm.CreateSubKey("SOFTWARE\Policies\Microsoft\Windows\AppPrivacy")
     try {
         foreach ($exception in @("LetAppsAccessCamera_ForceDenyTheseApps", "LetAppsAccessCamera_UserInControlOfTheseApps")) {
