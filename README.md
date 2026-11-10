@@ -25,14 +25,14 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-3a138cb3fe9c3ca43cd4d77302ae0396962c240cad4a46628c2946b79321d5da  WebcamStream.exe
-9b1266463ad08d7337ecf1c940cdf694e648b8d3633e3ac76b5090fc2a379860  WebcamStream-win-x64.zip
+14aa55609d99292e453d2022b9444928790e6cea9b85cc5e809545f524460836  WebcamStream.exe
+bb5571d345206573e5eb9ca72224986518842d6a201d010af387ff6cfa8c980f  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. Once the source is on that repository, `.github/workflows/release.yml` builds this same exe on a Windows runner and attaches it to release **v1.0.0**. Those downloads will be:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.3**. `.github/workflows/release.yml` builds this exe on a Windows runner and attaches it to release **v1.0.3**. Those downloads are:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.0/WebcamStream.exe>
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.0/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.3/WebcamStream.exe>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.3/WebcamStream-win-x64.zip>
 
 ## What you install, and where
 
@@ -209,6 +209,7 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | Installer stops with "Invalid class" or `reg.exe` cannot find a key | Use this copy of `Install-WebcamStream.ps1`. It opens the ports with `netsh` and writes the camera policy directly. Run it from an elevated PowerShell. |
 | Exacq never connects | Confirm the URL, port 554, and the firewall rules named WebcamStream RTSP and WebcamStream RTP. The log shows rejected addresses when the allow list is the reason. |
 | `0x80070005` or access denied | Close any other app that has the camera open. Run the installer again from an elevated PowerShell with `-Start`. It allows the camera, restarts the camera broker, and starts WebcamStream in the signed-in session. |
+| `--console` sits there and Windows marks it Suspended | That was the camera call blocking. 1.0.3 prints the refusal and exits within about 8 seconds. Close other camera apps, then run the installer with `-Start` before starting `--console` again. |
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |

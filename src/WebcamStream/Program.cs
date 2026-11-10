@@ -122,6 +122,7 @@ static class Program
             catch (Exception ex) when (!stop.IsCancellationRequested)
             {
                 Log.Error(ex.Message);
+                state.Failed = true;
                 stop.Cancel();
             }
         })
@@ -132,9 +133,8 @@ static class Program
         int lastId = 0;
         var lastCountAt = started;
         double measured = 0;
-        while (!stop.IsCancellationRequested)
+        while (!stop.Token.WaitHandle.WaitOne(1000))
         {
-            Thread.Sleep(1000);
             if (!config.WriteStatus) continue;
             int id = Volatile.Read(ref state.FrameId);
             var now = DateTime.UtcNow;
@@ -148,6 +148,8 @@ static class Program
             TryWriteStatus(config, server, state.Mode, measured);
         }
         capture.Join(2000);
+        if (state.Failed)
+            return 1;
         Log.Info("Stopped.");
         return 0;
     }
@@ -170,6 +172,7 @@ static class Program
     {
         public int FrameId;
         public string Mode = "";
+        public bool Failed;
     }
 
     static void TryWriteStatus(AppConfig config, RtspServer server, string mode, double measuredFps)
@@ -214,12 +217,18 @@ static class Program
         }
     }
 
+    static string ProductVersion()
+    {
+        var version = typeof(Program).Assembly.GetName().Version ?? new Version(1, 0, 3);
+        return $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}";
+    }
+
     static string VersionLine()
     {
 #if SELF_CONTAINED
-        return "WebcamStream 1.0.0 self-contained (this .exe does not need a .NET runtime installed)";
+        return $"WebcamStream {ProductVersion()} self-contained (this .exe does not need a .NET runtime installed)";
 #else
-        return "WebcamStream 1.0.0 framework-dependent (needs the .NET 8 Runtime, x64)";
+        return $"WebcamStream {ProductVersion()} framework-dependent (needs the .NET 8 Runtime, x64)";
 #endif
     }
 

@@ -50,17 +50,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          tag=v1.0.0
-          notes="$(cat <<'EOF'
-          WebcamStream 1.0.0 for 64-bit Windows 10 (version 1607) or later.
+          version="$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' src/WebcamStream/WebcamStream.csproj | head -n 1)"
+          tag="v$version"
+          notes="$(cat <<EOF
+          WebcamStream $version for 64-bit Windows 10 (version 1607) or later.
 
           WebcamStream.exe is self-contained. Do not install a .NET runtime to run it.
+
+          --console exits with an error if the camera does not deliver a frame within 8 seconds. It does not stay suspended waiting on Windows.
 
           The zip also contains config.jsonc, Install-WebcamStream.ps1, and Uninstall-WebcamStream.ps1.
           Unzip it, open an elevated PowerShell in that folder, and run one of:
 
-            .\Install-WebcamStream.ps1 -Mode ScheduledTask
-            .\Install-WebcamStream.ps1 -Mode Service
+            .\Install-WebcamStream.ps1 -Mode ScheduledTask -Start
+            .\Install-WebcamStream.ps1 -Mode Service -Start
 
           The program is installed to C:\ProgramData\WebcamStream.
           ExacqVision address: rtsp://THIS-PC:554/webcam
@@ -73,7 +76,7 @@ jobs:
             gh release upload "$tag" dist/win-x64/WebcamStream.exe dist/WebcamStream-win-x64.zip --clobber
           else
             gh release create "$tag" dist/win-x64/WebcamStream.exe dist/WebcamStream-win-x64.zip \
-              --title "WebcamStream 1.0.0" \
+              --title "WebcamStream $version" \
               --notes "$notes" \
               --target "${{ github.sha }}"
           fi

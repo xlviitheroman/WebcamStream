@@ -69,9 +69,8 @@ static class MediaFoundationCapture
         if (mode == null)
             throw new InvalidOperationException($"Camera '{camera.Name}' has no usable 8-bit video mode.");
 
-        Check(camera.Reader.SetStreamSelection(AllStreams, false), "SetStreamSelection");
-        Check(camera.Reader.SetStreamSelection(FirstVideo, true), "SetStreamSelection");
-        Check(camera.Reader.SetCurrentMediaType(FirstVideo, IntPtr.Zero, mode.Type), "SetCurrentMediaType");
+        Log.Info($"Opening '{camera.Name}'...");
+        SelectMode(camera, mode);
 
         string kind = SubtypeName(mode.Subtype);
         bool passthrough = mode.Subtype == Mjpg;
@@ -83,7 +82,7 @@ static class MediaFoundationCapture
         bool warnedHuffman = false;
         while (!token.IsCancellationRequested)
         {
-            int hr = camera.Reader.ReadSample(FirstVideo, 0, out _, out int flags, out _, out IntPtr samplePtr);
+            int hr = ReadSampleWithin(camera, TimeSpan.FromSeconds(8), out int flags, out IntPtr samplePtr);
             if (hr < 0)
                 throw new InvalidOperationException(AccessDenied(hr, "ReadSample"));
             if (samplePtr == IntPtr.Zero)
@@ -158,6 +157,95 @@ static class MediaFoundationCapture
         }
     }
 
+    static void SelectMode(OpenCamera camera, OpenMode mode)
+    {
+        CallWithin(() =>
+        {
+            Check(camera.Reader.SetStreamSelection(AllStreams, false), "SetStreamSelection");
+            Check(camera.Reader.SetStreamSelection(FirstVideo, true), "SetStreamSelection");
+            Check(camera.Reader.SetCurrentMediaType(FirstVideo, IntPtr.Zero, mode.Type), "SetCurrentMediaType");
+        }, () =>
+        {
+            try { camera.Source.Shutdown(); } catch { }
+        }, TimeSpan.FromSeconds(8));
+    }
+
+    static int ReadSampleWithin(OpenCamera camera, TimeSpan deadline, out int flags, out IntPtr sample)
+    {
+        int hr = 0;
+        int flagsLocal = 0;
+        IntPtr sampleLocal = IntPtr.Zero;
+        var gate = new CameraWait();
+        using var timer = Arm(gate, deadline, () =>
+        {
+            try { camera.Source.Shutdown(); } catch { }
+        });
+        try
+        {
+            hr = camera.Reader.ReadSample(FirstVideo, 0, out _, out flagsLocal, out _, out sampleLocal);
+        }
+        finally
+        {
+            Finish(timer, gate);
+        }
+        if (Volatile.Read(ref gate.Phase) == 2)
+        {
+            if (sampleLocal != IntPtr.Zero)
+                Marshal.Release(sampleLocal);
+            throw new InvalidOperationException("The camera did not connect within 8 seconds. Windows refused the device, so WebcamStream stopped instead of staying suspended.");
+        }
+        flags = flagsLocal;
+        sample = sampleLocal;
+        return hr;
+    }
+
+    static void CallWithin(Action call, Action cancel, TimeSpan deadline)
+    {
+        var gate = new CameraWait();
+        using var timer = Arm(gate, deadline, cancel);
+        try
+        {
+            call();
+        }
+        finally
+        {
+            Finish(timer, gate);
+        }
+        if (Volatile.Read(ref gate.Phase) == 2)
+            throw new InvalidOperationException("The camera did not connect within 8 seconds. Windows refused the device, so WebcamStream stopped instead of staying suspended.");
+    }
+
+    static Timer Arm(CameraWait gate, TimeSpan deadline, Action cancel)
+    {
+        return new Timer(_ =>
+        {
+            if (Interlocked.CompareExchange(ref gate.Phase, 2, 0) != 0)
+                return;
+            Log.Error("The camera did not connect within 8 seconds. Windows is refusing it, so WebcamStream is closing the device instead of waiting.");
+            try { cancel(); } catch { }
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                Thread.Sleep(2000);
+                if (Volatile.Read(ref gate.Phase) == 2)
+                {
+                    Log.Error("The camera call did not return. WebcamStream is exiting.");
+                    Environment.Exit(1);
+                }
+            });
+        }, null, deadline, Timeout.InfiniteTimeSpan);
+    }
+
+    static void Finish(Timer timer, CameraWait gate)
+    {
+        Interlocked.CompareExchange(ref gate.Phase, 1, 0);
+        timer.Change(Timeout.Infinite, Timeout.Infinite);
+    }
+
+    sealed class CameraWait
+    {
+        public int Phase;
+    }
+
     static int Stride(IMFMediaType type, int fallback)
     {
         int hr = type.GetUINT32(DefaultStride, out int stride);
@@ -221,7 +309,13 @@ static class MediaFoundationCapture
         try
         {
             Check(attrs.SetGUID(SourceType, Vidcap), "SetGUID");
-            Check(MFEnumDeviceSources(attrs, out IntPtr array, out int count), "MFEnumDeviceSources");
+            Log.Info("Looking for a camera...");
+            IntPtr array = IntPtr.Zero;
+            int count = 0;
+            CallWithin(
+                () => Check(MFEnumDeviceSources(attrs, out array, out count), "MFEnumDeviceSources"),
+                static () => { },
+                TimeSpan.FromSeconds(8));
             var list = new List<OpenCamera>();
             try
             {
@@ -231,7 +325,13 @@ static class MediaFoundationCapture
                     var activate = (IMFActivate)Marshal.GetObjectForIUnknown(punk);
                     Marshal.Release(punk);
                     string name = ReadName(activate, i);
-                    list.Add(Open(activate, i, name));
+                    Log.Info($"Connecting to '{name}'...");
+                    OpenCamera? opened = null;
+                    CallWithin(
+                        () => opened = Open(activate, i, name),
+                        () => { try { activate.ShutdownObject(); } catch { } },
+                        TimeSpan.FromSeconds(8));
+                    list.Add(opened!);
                 }
             }
             finally

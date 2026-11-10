@@ -28,6 +28,7 @@ static class Log
         lock (Gate)
         {
             Console.WriteLine(line);
+            Console.Out.Flush();
             if (_path == null)
                 return;
             try
