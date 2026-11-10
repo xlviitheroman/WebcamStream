@@ -85,6 +85,17 @@ public class StreamTests
         Assert.InRange(rgb[1], 0, 60);
         Assert.InRange(rgb[2], 0, 60);
 
+        var restarted = JpegCodec.BuildContainer(parsed.Width, parsed.Height, 1, 16, parsed.LumaQuant, parsed.ChromaQuant, parsed.Scan);
+        var withRestart = JpegCodec.TryParse(restarted);
+        Assert.NotNull(withRestart);
+        Assert.False(withRestart!.RecorderCanPlay);
+
+        var oneTable = RemoveSecondQuantTable(jpeg.Container);
+        var shared = JpegCodec.TryParse(oneTable);
+        Assert.NotNull(shared);
+        Assert.True(shared!.RecorderCanPlay);
+        Assert.Equal(shared.LumaQuant, shared.ChromaQuant);
+
         var clock = Stopwatch.StartNew();
         var big = Solid(1280, 720, 40, 80, 90, 100);
         clock.Stop();
@@ -109,6 +120,115 @@ public class StreamTests
         var container = JpegCodec.BuildContainer(width, height, type, 0, luma, chroma, scan);
         var rgb = Decode(container);
         Assert.InRange(rgb[2], 140, 255);
+    }
+
+    [Fact]
+    public async Task FfmpegReceivesTheTestPatternOverTcpAndUdp()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "webcamstream-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        var configPath = Path.Combine(dir, "config.jsonc");
+        await File.WriteAllTextAsync(configPath, """
+        {
+          "listenAddress": "127.0.0.1",
+          "port": 0,
+          "path": "/webcam",
+          "fps": 8,
+          "width": 320,
+          "height": 240,
+          "jpegQuality": 40,
+          "allow": [],
+          "testPattern": true,
+          "writeStatus": false
+        }
+        """);
+        var config = AppConfig.Read(configPath);
+        var access = new AccessControl(_ => Array.Empty<IPAddress>(), _ => null);
+        access.Replace(config.Allow);
+        using var server = new RtspServer(config, access);
+        server.Start();
+        using var stop = new CancellationTokenSource();
+        var pump = Task.Run(() =>
+        {
+            int tick = 0;
+            while (!stop.IsCancellationRequested)
+            {
+                var jpeg = Solid(320, 240, 40, (byte)(40 + tick % 180), 30, 200);
+                server.Publish(RtpJpeg.Packetize(jpeg, tick + 1, "test"));
+                tick++;
+                Thread.Sleep(80);
+            }
+        });
+        try
+        {
+            var tcp = DecodeWithFfmpeg(server.Port, "tcp");
+            Assert.Equal(320 * 240 * 3, tcp.Length);
+            Assert.True(tcp.Any(b => b > 40), "TCP picture was black");
+            var udp = DecodeWithFfmpeg(server.Port, "udp");
+            Assert.Equal(320 * 240 * 3, udp.Length);
+            Assert.True(udp.Any(b => b > 40), "UDP picture was black");
+        }
+        finally
+        {
+            stop.Cancel();
+            try { await pump.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
+        }
+    }
+
+    static byte[] RemoveSecondQuantTable(byte[] jpeg)
+    {
+        int seen = 0;
+        for (int i = 2; i + 3 < jpeg.Length; i++)
+        {
+            if (jpeg[i] != 0xFF || jpeg[i + 1] != 0xDB) continue;
+            seen++;
+            int len = (jpeg[i + 2] << 8) | jpeg[i + 3];
+            if (seen == 2)
+            {
+                var copy = new byte[jpeg.Length - (2 + len)];
+                Buffer.BlockCopy(jpeg, 0, copy, 0, i);
+                Buffer.BlockCopy(jpeg, i + 2 + len, copy, i, jpeg.Length - (i + 2 + len));
+                return copy;
+            }
+            i += 1 + len;
+        }
+        throw new InvalidOperationException("The test JPEG did not contain two quantization tables.");
+    }
+
+    static byte[] DecodeWithFfmpeg(int port, string transport)
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("n") + ".raw");
+        var psi = new ProcessStartInfo("ffmpeg")
+        {
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("-hide_banner");
+        psi.ArgumentList.Add("-loglevel");
+        psi.ArgumentList.Add("error");
+        psi.ArgumentList.Add("-rtsp_transport");
+        psi.ArgumentList.Add(transport);
+        psi.ArgumentList.Add("-i");
+        psi.ArgumentList.Add($"rtsp://webcam:webcam1@127.0.0.1:{port}/webcam");
+        psi.ArgumentList.Add("-frames:v");
+        psi.ArgumentList.Add("1");
+        psi.ArgumentList.Add("-f");
+        psi.ArgumentList.Add("rawvideo");
+        psi.ArgumentList.Add("-pix_fmt");
+        psi.ArgumentList.Add("rgb24");
+        psi.ArgumentList.Add(path);
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException("ffmpeg is required");
+        var error = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(15000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException($"ffmpeg {transport} did not decode a frame. {error}");
+        }
+        if (process.ExitCode != 0 || !File.Exists(path))
+            throw new InvalidOperationException($"ffmpeg {transport} failed ({process.ExitCode}): {error}");
+        var bytes = File.ReadAllBytes(path);
+        File.Delete(path);
+        return bytes;
     }
 
     [Fact]

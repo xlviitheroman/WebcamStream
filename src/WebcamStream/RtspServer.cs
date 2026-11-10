@@ -18,7 +18,7 @@ sealed class RtspServer : IDisposable
     readonly string _nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
     const string Realm = "WebcamStream";
     VideoFrame? _latest;
-    int _frameSerial;
+    long _packetsSent;
     Thread? _acceptThread;
     Thread? _sendThread;
     int _clientCount;
@@ -33,6 +33,7 @@ sealed class RtspServer : IDisposable
 
     public int Port { get; private set; }
     public int ClientCount => Volatile.Read(ref _clientCount);
+    public long PacketsSent => Interlocked.Read(ref _packetsSent);
 
     public void Start()
     {
@@ -44,13 +45,9 @@ sealed class RtspServer : IDisposable
         _sendThread.Start();
     }
 
-    public void Publish(VideoFrame frame)
-    {
-        _latest = frame;
-        _frameSerial = frame.Id;
-    }
+    public void Publish(VideoFrame frame) => Volatile.Write(ref _latest, frame);
 
-    public VideoFrame? Latest => _latest;
+    public VideoFrame? Latest => Volatile.Read(ref _latest);
 
     void AcceptLoop()
     {
@@ -113,7 +110,7 @@ sealed class RtspServer : IDisposable
                 continue;
             }
             next = now + interval;
-            var frame = _latest;
+            var frame = Volatile.Read(ref _latest);
             if (frame == null)
                 continue;
             uint timestamp = (uint)(clock.ElapsedMilliseconds * (RtpJpeg.Clock / 1000));
@@ -287,11 +284,13 @@ sealed class RtspServer : IDisposable
         if (tcp)
         {
             client.UseTcp = true;
-            client.RtpChannel = 0;
-            client.RtcpChannel = 1;
+            TryInterleaved(transport, out int rtpChannel, out int rtcpChannel);
+            client.RtpChannel = rtpChannel;
+            client.RtcpChannel = rtcpChannel;
             client.SessionId ??= NewSession();
             Respond(client, cseq, 200, "OK",
-                $"Session: {client.SessionId};timeout=60\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
+                $"Session: {client.SessionId};timeout=60\r\nTransport: RTP/AVP/TCP;unicast;interleaved={rtpChannel}-{rtcpChannel}\r\n");
+            Log.Info($"Viewer {client.Remote.Address} is receiving RTP inside the RTSP connection, channels {rtpChannel}-{rtcpChannel}.");
             return;
         }
 
@@ -315,10 +314,34 @@ sealed class RtspServer : IDisposable
         client.ServerRtpPort = sRtp;
         client.ServerRtcpPort = sRtcp;
         client.SessionId ??= NewSession();
-        var source = ((IPEndPoint)client.Tcp.Client.LocalEndPoint!).Address;
+        var source = Unmap(((IPEndPoint)client.Tcp.Client.LocalEndPoint!).Address);
         Respond(client, cseq, 200, "OK",
             $"Session: {client.SessionId};timeout=60\r\nTransport: RTP/AVP;unicast;client_port={cRtp}-{cRtcp};server_port={sRtp}-{sRtcp};source={source}\r\n");
+        Log.Info($"Viewer {client.Remote.Address} is receiving RTP over UDP. This PC sends to {Unmap(client.Remote.Address)}:{cRtp}. Server ports are {sRtp}-{sRtcp}.");
     }
+
+    static void TryInterleaved(string transport, out int rtp, out int rtcp)
+    {
+        rtp = 0;
+        rtcp = 1;
+        int idx = transport.IndexOf("interleaved", StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return;
+        int eq = transport.IndexOf('=', idx);
+        if (eq < 0) return;
+        var value = transport[(eq + 1)..];
+        int semi = value.IndexOf(';');
+        if (semi >= 0) value = value[..semi];
+        var pair = value.Split('-', 2);
+        if (!int.TryParse(pair[0].Trim(), out int first)) return;
+        int second = first + 1;
+        if (pair.Length > 1 && !int.TryParse(pair[1].Trim(), out second)) return;
+        if (first is < 0 or > 255 || second is < 0 or > 255) return;
+        rtp = first;
+        rtcp = second;
+    }
+
+    static IPAddress Unmap(IPAddress address) =>
+        address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
 
     bool TryBindServerPorts(out int rtp, out int rtcp, out UdpClient udp, out UdpClient udpRtcp)
     {
@@ -386,6 +409,7 @@ sealed class RtspServer : IDisposable
             WritePacket(client, packet, rtcp: false);
             client.Packets++;
             client.Octets += (uint)slice.Payload.Length;
+            Interlocked.Increment(ref _packetsSent);
         }
     }
 
@@ -416,7 +440,7 @@ sealed class RtspServer : IDisposable
         var socket = rtcp ? client.UdpRtcp : client.Udp;
         if (socket == null) return;
         int port = rtcp ? client.ClientRtcpPort : client.ClientRtpPort;
-        var dest = new IPEndPoint(client.Remote.Address, port);
+        var dest = new IPEndPoint(Unmap(client.Remote.Address), port);
         socket.Send(packet, packet.Length, dest);
     }
 
@@ -442,7 +466,7 @@ sealed class RtspServer : IDisposable
 
     string BuildSdp(Client client)
     {
-        var local = ((IPEndPoint)client.Tcp.Client.LocalEndPoint!).Address;
+        var local = Unmap(((IPEndPoint)client.Tcp.Client.LocalEndPoint!).Address);
         var frame = _latest;
         int fps = Math.Clamp(_config.Fps, 1, 15);
         return
@@ -457,6 +481,7 @@ sealed class RtspServer : IDisposable
             "m=video 0 RTP/AVP 26\r\n" +
             "c=IN IP4 0.0.0.0\r\n" +
             "a=rtpmap:26 JPEG/90000\r\n" +
+            "a=sendonly\r\n" +
             $"a=framerate:{fps}\r\n" +
             "a=control:track1\r\n" +
             (frame == null ? "" : $"a=x-dimensions:{frame.Width},{frame.Height}\r\n");
@@ -466,7 +491,7 @@ sealed class RtspServer : IDisposable
     {
         var local = (IPEndPoint)client.Tcp.Client.LocalEndPoint!;
         var path = _config.Path.TrimEnd('/');
-        return $"rtsp://{local.Address}:{local.Port}{path}/";
+        return $"rtsp://{Unmap(local.Address)}:{local.Port}{path}/";
     }
 
     bool Authorized(Dictionary<string, string> headers, string url, string method)
@@ -691,9 +716,9 @@ sealed class RtspServer : IDisposable
         public IPEndPoint Remote { get; }
         public object WriteLock { get; } = new();
         public string? SessionId { get; set; }
-        public bool Playing;
+        public volatile bool Playing;
         public bool Paused;
-        public bool Closed;
+        public volatile bool Closed;
         public bool TimedOut;
         public bool UseTcp = true;
         public int RtpChannel;

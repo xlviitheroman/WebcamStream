@@ -138,6 +138,7 @@ static class Program
         int lastId = 0;
         var lastCountAt = started;
         double measured = 0;
+        bool warnedBlank = false;
         while (!stop.Token.WaitHandle.WaitOne(1000))
         {
             if (!config.WriteStatus) continue;
@@ -149,6 +150,12 @@ static class Program
                 measured = (id - lastId) / seconds;
                 lastId = id;
                 lastCountAt = now;
+                Log.Info($"Picture: {state.Mode}. {measured:0.0} pictures/sec, {server.ClientCount} viewer(s), {server.PacketsSent} RTP packets sent.");
+                if (id == 0 && !warnedBlank)
+                {
+                    warnedBlank = true;
+                    Log.Warn("The camera can be on and still send no picture. A viewer stays blank until this line reports pictures/sec above 0.");
+                }
             }
             TryWriteStatus(config, server, state.Mode, measured);
         }

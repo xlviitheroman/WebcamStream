@@ -25,12 +25,12 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-68756b602a2aa1c0cbe50d42be7f3823bf756ebef2a79f047a962d67f7a19d38  WebcamStream-win-x64.zip
+13854441a9b3838e111a79020d192c22d67b945046a1ac29b6bbe7195f59fe1c  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.10**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.10**:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.11**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.11**:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.10/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.11/WebcamStream-win-x64.zip>
 
 Unzip the whole folder and run the installer from there. `WebcamStream.exe` needs the files beside it, which is what lets the Windows service answer before Windows gives up with error 1053. Older releases are deleted when a new build is published.
 
@@ -218,6 +218,7 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |
-| Service fails with error 1053 | The program was unpacking the .NET runtime before it could answer Windows. Use the 1.0.10 zip, unzip the whole folder, and run that installer. It copies the runtime files beside the exe and writes the `--service` command line. The failure is recorded in `Install-WebcamStream.log`. |
+| The viewer connects and the camera light is on, but the picture stays blank | Open `C:\ProgramData\WebcamStream\WebcamStream.log`. Every few seconds it reports pictures/sec and whether the viewer is on UDP or inside the RTSP connection. 1.0.11 switches to software JPEG when the camera's own JPEG is something a recorder will not show. Use the 1.0.11 zip. |
+| Service fails with error 1053 | The program was unpacking the .NET runtime before it could answer Windows. Use the current zip, unzip the whole folder, and run that installer. It copies the runtime files beside the exe. The failure is recorded in `Install-WebcamStream.log`. |
 | Install fails | Open `Install-WebcamStream.log` in the folder you ran the script from. The same text is in `C:\ProgramData\WebcamStream\Install.log` when that folder exists. |
 | Installer stops on `SetValue` | Fixed in 1.0.8 and later. Run the current installer. |

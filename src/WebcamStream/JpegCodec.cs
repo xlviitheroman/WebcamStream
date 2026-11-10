@@ -12,6 +12,22 @@ sealed class EncodedJpeg
     public byte[] Container { get; init; } = Array.Empty<byte>();
     public bool StandardHuffman { get; init; } = true;
     public bool Supported { get; init; } = true;
+
+    public bool RecorderCanPlay =>
+        Supported
+        && StandardHuffman
+        && RestartInterval == 0
+        && Scan.Length > 0
+        && Width >= 16
+        && Height >= 16
+        && LumaQuant.Length == 64
+        && ChromaQuant.Length == 64
+        && Type switch
+        {
+            0 => (Width & 15) == 0 && (Height & 7) == 0,
+            1 => (Width & 15) == 0 && (Height & 15) == 0,
+            _ => false,
+        };
 }
 
 static class JpegCodec
@@ -201,8 +217,11 @@ static class JpegCodec
                     return null;
                 int sosLen = (jpeg[i] << 8) | jpeg[i + 1];
                 int scanStart = i + sosLen;
-                if (scanStart > jpeg.Length || width == 0 || luma == null || chroma == null || type < 0)
+                if (scanStart > jpeg.Length || width == 0 || luma == null || type < 0)
                     return null;
+                // One quantization table shared by every component is valid JPEG.
+                // RTP still needs a chroma table, so reuse the luma table.
+                chroma ??= (byte[])luma.Clone();
                 var scan = ExtractScan(jpeg[scanStart..]);
                 return new EncodedJpeg
                 {

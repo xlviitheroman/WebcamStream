@@ -71,6 +71,8 @@ jobs:
 
           The installer writes Install-WebcamStream.log in the folder you ran it from, and copies that file to C:\ProgramData\WebcamStream\Install.log.
 
+          WebcamStream.log reports pictures per second and whether the viewer is using UDP. If the camera JPEG cannot be shown, the program switches to software JPEG.
+
           To build from source instead, install the .NET 8 SDK (x64).
           A framework-dependent build needs the .NET 8 Runtime (x64), the package named ".NET Runtime", not the Desktop Runtime and not the ASP.NET Core Runtime. winget id: Microsoft.DotNet.Runtime.8
           EOF

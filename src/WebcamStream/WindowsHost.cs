@@ -20,6 +20,7 @@ sealed class WebcamStreamService : ServiceBase
     protected override void OnStart(string[] args)
     {
         try { RequestAdditionalTime(30000); } catch { }
+        Log.ShareWithSignedInUsers(Path.Combine(AppConfig.ProgramDataDirectory, "status.json"));
         Log.Info("Windows service is running. The camera opens in the signed-in session.");
         _supervisor = new StreamSupervisor(ConfigPath);
         _supervisor.Start();

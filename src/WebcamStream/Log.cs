@@ -1,11 +1,46 @@
+using System.Security.AccessControl;
+using System.Security.Principal;
+
 namespace WebcamStream;
 
 static class Log
 {
     static readonly object Gate = new();
     static string? _path;
+    static bool _shared;
 
     public static bool UseConsole { get; set; } = true;
+
+    public static void ShareWithSignedInUsers(string path)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(path))
+            return;
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists)
+            {
+                var dir = info.DirectoryName;
+                if (!string.IsNullOrEmpty(dir))
+                    Directory.CreateDirectory(dir);
+                File.WriteAllBytes(path, Array.Empty<byte>());
+                info.Refresh();
+            }
+            var security = info.GetAccessControl();
+            var users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+            security.AddAccessRule(new FileSystemAccessRule(
+                users,
+                FileSystemRights.Modify,
+                InheritanceFlags.None,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            info.SetAccessControl(security);
+        }
+        catch
+        {
+            // The service creates the log and can grant this. The worker only needs to append.
+        }
+    }
 
     public static void SetPath(string? path)
     {
@@ -46,13 +81,20 @@ static class Log
             try
             {
                 var info = new FileInfo(_path);
-                if (info.Exists && info.Length > 1_000_000)
+                var rotated = info.Exists && info.Length > 1_000_000;
+                if (rotated)
                 {
                     var backup = _path + ".1";
                     File.Delete(backup);
                     File.Move(_path, backup);
+                    _shared = false;
                 }
                 File.AppendAllText(_path, line + Environment.NewLine);
+                if (!_shared)
+                {
+                    ShareWithSignedInUsers(_path);
+                    _shared = true;
+                }
             }
             catch
             {

@@ -79,7 +79,7 @@ static class MediaFoundationCapture
 
         var interval = TimeSpan.FromSeconds(1.0 / Math.Clamp(config.Fps, 1, 15));
         var next = DateTime.UtcNow;
-        bool warnedHuffman = false;
+        int rejected = 0;
         while (!token.IsCancellationRequested)
         {
             int hr = ReadSampleWithin(camera, TimeSpan.FromSeconds(8), out int flags, out IntPtr samplePtr);
@@ -93,6 +93,7 @@ static class MediaFoundationCapture
             }
             IMFSample? sample = null;
             IMFMediaBuffer? buffer = null;
+            OpenMode? switchTo = null;
             try
             {
                 if (DateTime.UtcNow < next)
@@ -111,15 +112,34 @@ static class MediaFoundationCapture
                     {
                         jpeg = JpegCodec.TryParse(bytes);
                         label = "mjpeg-passthrough";
-                        if (jpeg == null || !jpeg.Supported)
+                        if (jpeg == null || !jpeg.RecorderCanPlay)
                         {
-                            Log.Warn("The camera JPEG is not a baseline 4:2:0 or 4:2:2 frame this stream can carry. Pick another mode with --list-cameras.");
-                            continue;
-                        }
-                        if (!jpeg.StandardHuffman && !warnedHuffman)
-                        {
-                            warnedHuffman = true;
-                            Log.Warn("This camera uses non-standard Huffman tables. Some recorders, including some RTSP JPEG decoders, will not show a picture. A camera mode that uses standard tables is the low-CPU fix.");
+                            rejected++;
+                            string why = jpeg == null
+                                ? "it is not a baseline JPEG"
+                                : !jpeg.Supported
+                                    ? "its color format is not 4:2:0 or 4:2:2"
+                                    : !jpeg.StandardHuffman
+                                        ? "it uses Huffman tables recorders cannot decode"
+                                        : jpeg.RestartInterval > 0
+                                            ? "it uses restart markers recorders often will not show"
+                                            : "its size cannot be carried in this stream";
+                            if (jpeg == null && rejected < 4)
+                            {
+                                if (rejected == 1)
+                                    Log.Warn($"The camera JPEG is not usable yet ({why}).");
+                                continue;
+                            }
+                            var raw = PickRawMode(camera.Modes, config);
+                            if (raw == null)
+                            {
+                                if (rejected == 1 || rejected == 4)
+                                    Log.Warn($"The camera JPEG cannot be shown ({why}), and the camera has no uncompressed picture. Viewers will stay blank.");
+                                continue;
+                            }
+                            Log.Warn($"The camera JPEG cannot be shown ({why}). Switching to software JPEG from {SubtypeName(raw.Subtype)} {raw.Width}x{raw.Height}.");
+                            switchTo = raw;
+                            jpeg = null;
                         }
                     }
                     else if (mode.Subtype == Nv12)
@@ -153,6 +173,13 @@ static class MediaFoundationCapture
                 if (buffer != null) Marshal.ReleaseComObject(buffer);
                 if (sample != null) Marshal.ReleaseComObject(sample);
                 Marshal.Release(samplePtr);
+            }
+            if (switchTo != null)
+            {
+                mode = switchTo;
+                passthrough = false;
+                kind = SubtypeName(mode.Subtype);
+                SelectMode(camera, mode);
             }
         }
     }
@@ -278,6 +305,34 @@ static class MediaFoundationCapture
             double fps = mode.Fps <= 0 ? 30 : mode.Fps;
             score -= Math.Abs(fps - config.Fps) * 20;
             if (fps > config.Fps && fps <= config.Fps * 3) score += 30;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = mode;
+            }
+        }
+        return best;
+    }
+
+    static OpenMode? PickRawMode(IReadOnlyList<OpenMode> modes, AppConfig config)
+    {
+        OpenMode? best = null;
+        double bestScore = double.NegativeInfinity;
+        foreach (var mode in modes)
+        {
+            if (mode.Subtype == Mjpg) continue;
+            if (mode.Width < 16 || mode.Height < 16 || mode.Width > 2040 || mode.Height > 2040)
+                continue;
+            if ((mode.Width & 15) != 0 || (mode.Height & 15) != 0)
+                continue;
+            string name = SubtypeName(mode.Subtype);
+            if (name == "other") continue;
+            double score = mode.Subtype == Nv12 ? 3_000 : mode.Subtype == Yuy2 ? 2_000 : 100;
+            long area = (long)mode.Width * mode.Height;
+            long target = (long)config.Width * config.Height;
+            if (mode.Width == config.Width && mode.Height == config.Height) score += 80_000;
+            score -= Math.Abs(area - target) / 400.0;
+            if (area > target * 2) score -= 50_000;
             if (score > bestScore)
             {
                 bestScore = score;

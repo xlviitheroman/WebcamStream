@@ -9,7 +9,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <RootNamespace>WebcamStream</RootNamespace>
     <AssemblyName>WebcamStream</AssemblyName>
-    <Version>1.0.10</Version>
+    <Version>1.0.11</Version>
     <Description>Low-CPU webcam RTSP server for Windows.</Description>
     <PublishReadyToRun>false</PublishReadyToRun>
   </PropertyGroup>
@@ -18,6 +18,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.1" />
+    <PackageReference Include="System.IO.FileSystem.AccessControl" Version="5.0.0" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\..\config\config.jsonc">
