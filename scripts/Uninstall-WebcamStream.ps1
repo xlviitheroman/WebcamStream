@@ -3,6 +3,10 @@
 .SYNOPSIS
   Remove the WebcamStream service, scheduled task, and firewall rules.
 
+.DESCRIPTION
+  Camera privacy values written by the installer are left in place. Removing this program
+  does not turn the webcam back off.
+
 .EXAMPLE
   .\Uninstall-WebcamStream.ps1
   .\Uninstall-WebcamStream.ps1 -Purge
@@ -48,3 +52,4 @@ if ($Purge -and (Test-Path -LiteralPath $InstallDir)) {
     Write-Host "Removed the service, scheduled task, and firewall rules."
     Write-Host "Left the files in $InstallDir. Pass -Purge to delete them, including the config."
 }
+Write-Host "Left the webcam allowed for every account. This uninstall does not turn it off."

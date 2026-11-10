@@ -26,7 +26,7 @@ SHA-256 of this build:
 
 ```text
 9fd7f2149f5808dda0b187f338a154fc775ae8a81282274e23476bc40ac11313  WebcamStream.exe
-0e8e545a835f94d0d690a2028253753ec917406b2597033887c308b54dd3bd8c  WebcamStream-win-x64.zip
+86ab66e8653d41800ad43b46416d76923228fe96bc1d57dda471adb430cd6526  WebcamStream-win-x64.zip
 ```
 
 The public repository is <https://github.com/xlviitheroman/WebcamStream>. Once the source is on that repository, `.github/workflows/release.yml` builds this same exe on a Windows runner and attaches it to release **v1.0.0**. Those downloads will be:
@@ -172,11 +172,24 @@ If `--list-cameras` shows no `MJPG` line, the fallback compresses NV12, YUY2, or
 
 ## Camera privacy
 
-Windows 10 and 11 will refuse the camera if desktop apps are not allowed to use it.
+Windows 10 and 11 will refuse the camera if desktop apps are not allowed to use it. The installer is already running as administrator, and it forces the webcam on for every account before it registers the service or the scheduled task.
 
-**Settings → Privacy & security → Camera → Let desktop apps access your camera** must be on.
+It writes these values with the 64-bit registry editor:
 
-The scheduled task and the service worker both run as the signed-in user, in that user's session, so that switch applies. A service that tried to open the camera from session 0 usually gets access denied. WebcamStream does not do that.
+| Key | Value | What it does |
+| --- | --- | --- |
+| `HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy` | `LetAppsAccessCamera` = `2` | Forces Windows apps to allow the camera. Any per-app deny list is removed. |
+| `HKLM\SOFTWARE\Policies\Microsoft\Camera` | `AllowCamera` = `1` | Keeps the camera device enabled for the PC. |
+| `...\CapabilityAccessManager\ConsentStore\webcam` | `Value` = `Allow` | Turns camera access on. |
+| `...\ConsentStore\webcam\NonPackaged` | `Value` = `Allow` | Lets desktop apps, including WebcamStream, open the camera. |
+| `...\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}` | `Value` = `Allow` | Allows the webcam device interface. |
+| Sensor permission for that same webcam id | `SensorPermissionState` = `1` | Allows the camera sensor. |
+
+The machine keys cover the PC. The same consent values are then written for `.DEFAULT`, every signed-in user, every other profile under `ProfileList` whose `NTUSER.DAT` can be loaded, and the Default user template so the next new account is allowed too. A profile Windows has locked is skipped. The machine policy still forces the camera on for that account.
+
+Someone who is already signed in may need to sign out once before Media Foundation notices the change. Uninstall removes the service, the task, and the firewall rules. It does not turn the camera back off.
+
+The scheduled task and the service worker both run as the signed-in user, in that user's session. A service that tried to open the camera from session 0 usually gets access denied. WebcamStream does not do that.
 
 ## Build from source
 
@@ -192,7 +205,7 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | What you see | What to do |
 | --- | --- |
 | Exacq never connects | Confirm the URL, port 554, and the firewall rules. The log shows rejected addresses when the allow list is the reason. |
-| `ReadSample failed` or access denied | Turn on desktop camera access. Run `--console` once from the signed-in user before using the service. Close any other app that has the camera open. |
+| `ReadSample failed` or access denied | Run the installer again from an elevated PowerShell. It forces camera access on for every account. Sign out and back in if that user was already signed in, then run `--console` once. Close any other app that has the camera open. |
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |

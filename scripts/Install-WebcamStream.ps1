@@ -10,6 +10,10 @@
   The service starts at boot. It waits until someone signs in, then opens the camera in that
   session. The service itself runs as LocalSystem.
 
+  Because this script is running elevated, it also forces the webcam on for every account.
+  Windows apps are forced to Allow, and desktop-app camera consent is set to Allow in each
+  profile that can be opened. Uninstall does not turn the camera back off.
+
 .EXAMPLE
   .\Install-WebcamStream.ps1 -Mode ScheduledTask
   .\Install-WebcamStream.ps1 -Mode Service
@@ -83,6 +87,113 @@ The release .exe published with this project is self-contained and does not need
 "@
 }
 
+function Get-NativeReg {
+    $sysnative = Join-Path $env:windir "Sysnative\reg.exe"
+    if (Test-Path -LiteralPath $sysnative) { return $sysnative }
+    return (Join-Path $env:windir "System32\reg.exe")
+}
+
+function Add-RegValue {
+    param(
+        [string]$RegExe,
+        [string]$Key,
+        [string]$Name,
+        [string]$Type,
+        [string]$Data
+    )
+    & $RegExe add $Key /v $Name /t $Type /d $Data /f | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "reg add $Key /v $Name failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Enable-WebcamForAllUsers {
+    $reg = Get-NativeReg
+    Write-Host "Forcing the webcam on for every account on this PC."
+
+    # 2 is Force Allow. 0 leaves the choice to each user, and 1 forces the camera off.
+    Add-RegValue $reg "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessCamera" "REG_DWORD" "2"
+    foreach ($exception in @("LetAppsAccessCamera_ForceDenyTheseApps", "LetAppsAccessCamera_UserInControlOfTheseApps")) {
+        & $reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" /v $exception /f 2>$null | Out-Null
+    }
+    # 1 allows the camera device. 0 disables it for the whole PC.
+    Add-RegValue $reg "HKLM\SOFTWARE\Policies\Microsoft\Camera" "AllowCamera" "REG_DWORD" "1"
+
+    $consent = @(
+        "SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam",
+        "SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam\NonPackaged",
+        "SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}"
+    )
+    $webcamGuid = "{E5323777-F976-4f5b-9B55-B94699C46E44}"
+    $roots = New-Object System.Collections.Generic.List[string]
+    $roots.Add("HKLM")
+    $roots.Add("HKU\.DEFAULT")
+
+    Get-ChildItem -Path Registry::HKEY_USERS -ErrorAction SilentlyContinue | ForEach-Object {
+        $name = $_.PSChildName
+        if ($name -like "*_Classes" -or $name -eq ".DEFAULT") { return }
+        if ($name -match '^S-1-5-21-\d+-\d+-\d+-\d+$') { $roots.Add("HKU\$name") }
+    }
+
+    $mounted = New-Object System.Collections.Generic.List[string]
+    function Mount-OfflineHive {
+        param([string]$File, [string]$Name)
+        if (-not (Test-Path -LiteralPath $File)) { return $false }
+        & $reg load "HKU\$Name" $File | Out-Null
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $mounted.Add($Name)
+        return $true
+    }
+
+    $profileList = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+    if (Test-Path -LiteralPath $profileList) {
+        foreach ($sidKey in Get-ChildItem -LiteralPath $profileList) {
+            $sid = $sidKey.PSChildName
+            if ($sid -notmatch '^S-1-5-21-\d+-\d+-\d+-\d+$') { continue }
+            if ($roots.Contains("HKU\$sid")) { continue }
+            $image = (Get-ItemProperty -LiteralPath $sidKey.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath
+            if (-not $image) { continue }
+            $ntuser = Join-Path ([Environment]::ExpandEnvironmentVariables($image)) "NTUSER.DAT"
+            $mount = "WebcamStream_" + $sid.Replace("-", "_")
+            if (Mount-OfflineHive $ntuser $mount) {
+                $roots.Add("HKU\$mount")
+            } else {
+                Write-Host "Could not open the profile for $sid. The machine policy still forces the camera on for that account."
+            }
+        }
+    }
+
+    $defaultProfile = Join-Path $env:SystemDrive "Users\Default\NTUSER.DAT"
+    if (Mount-OfflineHive $defaultProfile "WebcamStream_DefaultUser") {
+        $roots.Add("HKU\WebcamStream_DefaultUser")
+    }
+
+    try {
+        foreach ($root in $roots) {
+            foreach ($relative in $consent) {
+                Add-RegValue $reg "$root\$relative" "Value" "REG_SZ" "Allow"
+            }
+            if ($root -eq "HKLM") {
+                Add-RegValue $reg "$root\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Overrides\$webcamGuid" "SensorPermissionState" "REG_DWORD" "1"
+            } else {
+                Add-RegValue $reg "$root\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Permissions\$webcamGuid" "SensorPermissionState" "REG_DWORD" "1"
+            }
+        }
+    } finally {
+        foreach ($name in @($mounted)) {
+            [gc]::Collect()
+            Start-Sleep -Milliseconds 200
+            & $reg unload "HKU\$name" | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "The profile hive HKU\$name is still loaded. Sign off and run 'reg unload HKU\$name' if Windows reports the file in use."
+            }
+        }
+    }
+
+    Write-Host "Webcam access is forced on for Windows apps, and desktop apps are allowed."
+    Write-Host "A person who is already signed in may need to sign out once before the camera opens."
+}
+
 function Invoke-Sc {
     param([string]$Arguments)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -127,6 +238,8 @@ foreach ($name in @("WebcamStream-RTSP-TCP", "WebcamStream-RTP-UDP")) {
 }
 New-NetFirewallRule -Name "WebcamStream-RTSP-TCP" -DisplayName "WebcamStream RTSP" -Direction Inbound -Action Allow -Protocol TCP -LocalPort $port -Profile Any | Out-Null
 New-NetFirewallRule -Name "WebcamStream-RTP-UDP" -DisplayName "WebcamStream RTP" -Direction Inbound -Action Allow -Protocol UDP -LocalPort "$rtpStart-$rtpEnd" -Profile Any | Out-Null
+
+Enable-WebcamForAllUsers
 
 if ($Mode -eq "Service") {
     Write-Host "Installing the WebcamStream Windows service."
