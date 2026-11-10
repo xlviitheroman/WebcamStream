@@ -29,7 +29,7 @@ SHA-256 of this build:
 0e8e545a835f94d0d690a2028253753ec917406b2597033887c308b54dd3bd8c  WebcamStream-win-x64.zip
 ```
 
-The repository at <https://github.com/xlviitheroman/WebcamStream> is the public home for this project. `.github/workflows/release.yml` builds the same exe on a Windows runner and attaches it to the **v1.0.0** release:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. Once the source is on that repository, `.github/workflows/release.yml` builds this same exe on a Windows runner and attaches it to release **v1.0.0**. Those downloads will be:
 
 - <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.0/WebcamStream.exe>
 - <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.0/WebcamStream-win-x64.zip>
