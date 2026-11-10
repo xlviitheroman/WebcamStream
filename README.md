@@ -25,12 +25,12 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-43c5a84133be9859d437bfeba1dc99e992d8a5fec01c78076b86c79e583d88af  WebcamStream-win-x64.zip
+49b1638b76aa52d632455d7ed3d098b977e20dec5b7d187ab4e845a1329afc9c  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.17**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.17**:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.18**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.18**:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.17/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.18/WebcamStream-win-x64.zip>
 
 Unzip the whole folder and run the installer from there. `WebcamStream.exe` needs the files beside it, which is what lets the Windows service answer before Windows gives up with error 1053. Older releases are deleted when a new build is published.
 
@@ -86,7 +86,7 @@ Add `-Start` to open the camera now in the session that is already signed in. Yo
 
 The installer writes `Install-WebcamStream.log` in the folder you ran it from, and copies that file to `C:\ProgramData\WebcamStream\Install.log`. The uninstaller writes `Uninstall-WebcamStream.log` the same way. Send the log from the folder you ran when an install fails. `-Purge` removes the copy under ProgramData and leaves the one next to the script.
 
-The script copies `WebcamStream.exe` to `C:\ProgramData\WebcamStream`, writes `config.jsonc` if it is not already there, and opens the firewall for TCP 554 and the UDP port range in the config. It does not overwrite a config you have already edited.
+The script copies `WebcamStream.exe` to `C:\ProgramData\WebcamStream`, writes `config.jsonc` if it is not already there, and allows that program through Windows Firewall on public, private, and domain networks. It also opens TCP 554 and the UDP port range in the config. Allowing the program is what stops the Windows Security Alert after a reboot. A signed-in user who is not an administrator cannot click Allow on that dialog. It does not overwrite a config you have already edited.
 
 Uninstall:
 
@@ -210,6 +210,7 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | What you see | What to do |
 | --- | --- |
 | Installer stops with "Invalid class" or `reg.exe` cannot find a key | Use this copy of `Install-WebcamStream.ps1`. It opens the ports with `netsh` and writes the camera policy directly. Run it from an elevated PowerShell. |
+| After a reboot, Windows Security Alert says the firewall blocked WebcamStream | The signed-in user cannot click Allow. 1.0.18 allows `C:\ProgramData\WebcamStream\WebcamStream.exe` through the firewall while the installer is elevated. Run that installer again. |
 | Exacq shows several tries, but WebcamStream.log shows one connection | Those tries share one TCP connection. 1.0.14 writes a line for each request on it, including whether a password was sent. A connection that never starts playing is closed after 15 seconds of silence so Exacq can open the next one. |
 | Exacq says 401 Unauthorized | The path is accepted and the login was rejected. Put `webcam` and `webcam1` in Exacq's username and password fields. The log names the username Exacq sent, or says that none was sent. |
 | Log says DESCRIBE answered 200, then "never started playing" | Exacq's LIVE555 client treated `a=sendonly` as a backchannel and skipped SETUP. 1.0.16 describes the stream the way that client expects. The next log lines should be SETUP and PLAY. |

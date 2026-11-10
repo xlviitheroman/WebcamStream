@@ -79,15 +79,17 @@ function Complete-UninstallLog {
 }
 
 function Remove-WebcamFirewallRule {
-    param([string]$DisplayName)
+    param([string]$DisplayName, [string]$Program)
     $netsh = Join-Path $env:windir "System32\netsh.exe"
     if (-not [Environment]::Is64BitProcess) {
         $native = Join-Path $env:windir "Sysnative\netsh.exe"
         if (Test-Path -LiteralPath $native) { $netsh = $native }
     }
+    $arguments = "advfirewall firewall delete rule name=`"$DisplayName`""
+    if ($Program) { $arguments = "advfirewall firewall delete rule name=all program=`"$Program`"" }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $netsh
-    $psi.Arguments = "advfirewall firewall delete rule name=`"$DisplayName`""
+    $psi.Arguments = $arguments
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
@@ -217,9 +219,10 @@ Remove-WebcamService
 Repair-DeniedCameraPolicy
 $task = Get-ScheduledTask -TaskName "WebcamStream" -ErrorAction SilentlyContinue
 if ($task) { Unregister-ScheduledTask -TaskName "WebcamStream" -Confirm:$false }
-foreach ($name in @("WebcamStream RTSP", "WebcamStream RTP", "WebcamStream-RTSP-TCP", "WebcamStream-RTP-UDP")) {
+foreach ($name in @("WebcamStream", "WebcamStream RTSP", "WebcamStream RTP", "WebcamStream-RTSP-TCP", "WebcamStream-RTP-UDP")) {
     Remove-WebcamFirewallRule -DisplayName $name
 }
+Remove-WebcamFirewallRule -Program (Join-Path $InstallDir "WebcamStream.exe")
 Stop-WebcamStreamProcess
 if ($Purge -and (Test-Path -LiteralPath $InstallDir)) {
     Remove-Item -LiteralPath $InstallDir -Recurse -Force

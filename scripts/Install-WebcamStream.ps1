@@ -172,7 +172,7 @@ function Invoke-Netsh {
 }
 
 function Set-WebcamFirewall {
-    param([string]$DisplayName, [string]$Protocol, [string]$Ports)
+    param([string]$DisplayName, [string]$Protocol, [string]$Ports, [string]$Program)
     $firewall = Get-Service -Name MpsSvc -ErrorAction SilentlyContinue
     if ($firewall -and $firewall.Status -ne "Running") {
         if ($firewall.StartType -eq "Disabled") { Set-Service -Name MpsSvc -StartupType Manual }
@@ -180,7 +180,20 @@ function Set-WebcamFirewall {
     }
     # New-NetFirewallRule uses a WMI class that is missing on some PCs ("Invalid class").
     # netsh talks to the firewall service directly.
+    # A port rule does not stop the Windows Security Alert after a reboot. That
+    # dialog is for the program, and a signed-in user who is not an administrator
+    # only gets Cancel. Allow the exe here, while this script is elevated.
+    if ($Program) {
+        Invoke-Netsh "advfirewall firewall delete rule name=all program=`"$Program`"" | Out-Null
+    }
     Invoke-Netsh "advfirewall firewall delete rule name=`"$DisplayName`"" | Out-Null
+    if ($Program) {
+        $added = Invoke-Netsh "advfirewall firewall add rule name=`"$DisplayName`" dir=in action=allow program=`"$Program`" enable=yes profile=any"
+        if ($added.Code -ne 0) {
+            throw "Could not allow $Program through Windows Firewall.`n$($added.Output)"
+        }
+        return
+    }
     $added = Invoke-Netsh "advfirewall firewall add rule name=`"$DisplayName`" dir=in action=allow protocol=$Protocol localport=$Ports profile=any enable=yes"
     if ($added.Code -ne 0) {
         throw "Could not open inbound $Protocol $Ports in Windows Firewall.`n$($added.Output)"
@@ -622,6 +635,7 @@ Grant-WebcamStreamAccess -Path $exe -Container $false
 if (Test-Path -LiteralPath $config) { Grant-WebcamStreamAccess -Path $config -Container $false }
 $port, $rtpStart, $rtpEnd = Read-StreamSettings $config
 
+Set-WebcamFirewall -DisplayName "WebcamStream" -Program $exe
 Set-WebcamFirewall -DisplayName "WebcamStream RTSP" -Protocol "TCP" -Ports "$port"
 Set-WebcamFirewall -DisplayName "WebcamStream RTP" -Protocol "UDP" -Ports "$rtpStart-$rtpEnd"
 
