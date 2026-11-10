@@ -232,6 +232,41 @@ public class StreamTests
     }
 
     [Fact]
+    public async Task ExacqDescribeWithoutTheWebcamPathStillGetsSdp()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "webcamstream-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        var configPath = Path.Combine(dir, "config.jsonc");
+        await File.WriteAllTextAsync(configPath, """
+        {
+          "listenAddress": "127.0.0.1",
+          "port": 0,
+          "path": "/webcam",
+          "allow": [ "127.0.0.1" ],
+          "writeStatus": false
+        }
+        """);
+        var config = AppConfig.Read(configPath);
+        var access = new AccessControl(_ => Array.Empty<IPAddress>(), _ => null);
+        access.Replace(config.Allow);
+        using var server = new RtspServer(config, access);
+        server.Start();
+        using var tcp = new TcpClient();
+        await tcp.ConnectAsync(IPAddress.Loopback, server.Port);
+        var stream = tcp.GetStream();
+        var auth = Basic("webcam", "webcam1");
+        var root = await Exchange(stream, $"DESCRIBE rtsp://nvr.office.example:554/ RTSP/1.0\r\nCSeq: 1\r\nAuthorization: {auth}\r\n\r\n");
+        Assert.Contains("200", root);
+        Assert.Contains("Content-Base: rtsp://nvr.office.example:554/", root);
+        Assert.Contains("JPEG/90000", root);
+        var track = await Exchange(stream, $"SETUP rtsp://nvr.office.example:554/trackID=1 RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\nAuthorization: {auth}\r\n\r\n");
+        Assert.Contains("200", track);
+        Assert.Contains("timeout=600", track);
+        Assert.DoesNotContain("404", root);
+        Assert.DoesNotContain("404", track);
+    }
+
+    [Fact]
     public async Task RtspClientReceivesAJpegFrame()
     {
         var dir = Path.Combine(Path.GetTempPath(), "webcamstream-" + Guid.NewGuid().ToString("n"));

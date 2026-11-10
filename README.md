@@ -25,12 +25,12 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-13854441a9b3838e111a79020d192c22d67b945046a1ac29b6bbe7195f59fe1c  WebcamStream-win-x64.zip
+dc9c39b7485704c0a72a72cf0fafb8a4b1483ef3dbbc52d244e64e35662ac488  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.11**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.11**:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.12**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.12**:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.11/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.12/WebcamStream-win-x64.zip>
 
 Unzip the whole folder and run the installer from there. `WebcamStream.exe` needs the files beside it, which is what lets the Windows service answer before Windows gives up with error 1053. Older releases are deleted when a new build is published.
 
@@ -125,7 +125,7 @@ WebcamStream.exe --console --test-pattern
    rtsp://192.168.1.40:554/webcam
    ```
 
-   Use this PC's address. The path `/webcam` and port `554` match the config defaults.
+   Use this PC's address. Port `554` and path `/webcam` match the defaults. A URL with no path also works. Put the username and password in the fields below, not only inside the URL.
 5. Set **Username** to `webcam` and **Password** to `webcam1`, unless you changed them in `config.jsonc`. A recorder with no separate fields can use `rtsp://webcam:webcam1@192.168.1.40:554/webcam`.
 6. Click **Apply**.
 
@@ -210,7 +210,7 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | What you see | What to do |
 | --- | --- |
 | Installer stops with "Invalid class" or `reg.exe` cannot find a key | Use this copy of `Install-WebcamStream.ps1`. It opens the ports with `netsh` and writes the camera policy directly. Run it from an elevated PowerShell. |
-| Exacq never connects | Confirm the URL, port 554, the username and password, and the firewall rules named WebcamStream RTSP and WebcamStream RTP. The defaults are `webcam` and `webcam1`. The log shows rejected addresses when the allow list is the reason. |
+| Exacq says DESCRIBE 404, connect timeout, or no RTSP session | VLC can play while Exacq asks for a different path and then drops the quiet session at 60 seconds. 1.0.12 accepts the path Exacq requests and keeps the session while Exacq is recording. The log line `RTSP DESCRIBE` shows the URL Exacq used. Username `webcam`, password `webcam1`, port 554. |
 | `0x80070005` or access denied | Close any other app that has the camera open. Run the installer again from an elevated PowerShell with `-Start`. It allows the camera, restarts the camera broker, and starts WebcamStream in the signed-in session. |
 | `--console` sits there and Windows marks it Suspended | That was the camera call blocking. 1.0.3 and later print the refusal and exit within about 8 seconds. Close other camera apps, then run the installer with `-Start` before starting `--console` again. |
 | Uninstall leaves the WebcamStream service | Use this `Uninstall-WebcamStream.ps1`. It turns off the service restart policy, stops WebcamStream, ends the process if Windows will not, and deletes the service. Close `services.msc` if it is open, then run the uninstall again. |

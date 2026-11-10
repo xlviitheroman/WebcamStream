@@ -153,7 +153,11 @@ sealed class RtspServer : IDisposable
                 try { first = stream.ReadByte(); }
                 catch (IOException)
                 {
-                    if (DateTime.UtcNow - client.LastActivity > TimeSpan.FromSeconds(60))
+                    // A recorder such as Exacq keeps the RTSP connection quiet while it
+                    // records. Dropping it at 60 seconds is the "media session timeout"
+                    // and the following PLAY with no session. A playing viewer stays up
+                    // until it closes the connection or sends TEARDOWN.
+                    if (!client.Playing && DateTime.UtcNow - client.LastActivity > TimeSpan.FromMinutes(10))
                         break;
                     continue;
                 }
@@ -168,8 +172,6 @@ sealed class RtspServer : IDisposable
                 if (text == null) break;
                 client.Touch();
                 Handle(client, stream, text);
-                if (client.TimedOut)
-                    break;
             }
         }
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
@@ -214,11 +216,6 @@ sealed class RtspServer : IDisposable
             }
         }
 
-        if (DateTime.UtcNow - client.LastActivity > TimeSpan.FromSeconds(70) && method != "OPTIONS" && method != "DESCRIBE")
-        {
-            client.TimedOut = true;
-        }
-
         bool authed = method == "OPTIONS" || Authorized(headers, url, method);
         if (!authed)
         {
@@ -234,14 +231,16 @@ sealed class RtspServer : IDisposable
                 Respond(client, cseq, 200, "OK", "Public: OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, GET_PARAMETER, SET_PARAMETER\r\n");
                 break;
             case "DESCRIBE":
-                if (!PathOk(url)) { Respond(client, cseq, 404, "Not Found", ""); break; }
+                RememberPresentation(client, url, headers);
+                Log.Info($"RTSP DESCRIBE {url}");
                 var sdp = BuildSdp(client);
                 var body = Encoding.ASCII.GetBytes(sdp);
-                var extra = $"Content-Type: application/sdp\r\nContent-Base: {BaseUrl(client)}\r\nContent-Length: {body.Length}\r\n";
+                var extra = $"Content-Type: application/sdp\r\nContent-Base: {client.PresentationUrl}\r\nContent-Length: {body.Length}\r\n";
                 Respond(client, cseq, 200, "OK", extra, body);
                 break;
             case "SETUP":
-                if (!PathOk(url)) { Respond(client, cseq, 404, "Not Found", ""); break; }
+                RememberPresentation(client, url, headers);
+                Log.Info($"RTSP SETUP {url}");
                 if (!headers.TryGetValue("Transport", out var transport))
                 {
                     Respond(client, cseq, 400, "Bad Request", "");
@@ -251,11 +250,12 @@ sealed class RtspServer : IDisposable
                 break;
             case "PLAY":
                 if (client.SessionId == null) { Respond(client, cseq, 454, "Session Not Found", ""); break; }
+                RememberPresentation(client, url, headers);
                 client.Playing = true;
                 client.Paused = false;
                 Respond(client, cseq, 200, "OK",
-                    $"Session: {client.SessionId};timeout=60\r\nRange: npt=0.000-\r\nRTP-Info: url={BaseUrl(client)}track1;seq={client.Sequence};rtptime={client.Timestamp}\r\n");
-                Log.Info($"Playing for {client.Remote.Address}");
+                    $"Session: {client.SessionId};timeout=600\r\nRange: npt=0.000-\r\nRTP-Info: url={client.PresentationUrl}track1;seq={client.Sequence};rtptime={client.Timestamp}\r\n");
+                Log.Info($"RTSP PLAY {url}");
                 break;
             case "PAUSE":
                 client.Playing = false;
@@ -289,7 +289,7 @@ sealed class RtspServer : IDisposable
             client.RtcpChannel = rtcpChannel;
             client.SessionId ??= NewSession();
             Respond(client, cseq, 200, "OK",
-                $"Session: {client.SessionId};timeout=60\r\nTransport: RTP/AVP/TCP;unicast;interleaved={rtpChannel}-{rtcpChannel}\r\n");
+                $"Session: {client.SessionId};timeout=600\r\nTransport: RTP/AVP/TCP;unicast;interleaved={rtpChannel}-{rtcpChannel}\r\n");
             Log.Info($"Viewer {client.Remote.Address} is receiving RTP inside the RTSP connection, channels {rtpChannel}-{rtcpChannel}.");
             return;
         }
@@ -316,7 +316,7 @@ sealed class RtspServer : IDisposable
         client.SessionId ??= NewSession();
         var source = Unmap(((IPEndPoint)client.Tcp.Client.LocalEndPoint!).Address);
         Respond(client, cseq, 200, "OK",
-            $"Session: {client.SessionId};timeout=60\r\nTransport: RTP/AVP;unicast;client_port={cRtp}-{cRtcp};server_port={sRtp}-{sRtcp};source={source}\r\n");
+            $"Session: {client.SessionId};timeout=600\r\nTransport: RTP/AVP;unicast;client_port={cRtp}-{cRtcp};server_port={sRtp}-{sRtcp};source={source}\r\n");
         Log.Info($"Viewer {client.Remote.Address} is receiving RTP over UDP. This PC sends to {Unmap(client.Remote.Address)}:{cRtp}. Server ports are {sRtp}-{sRtcp}.");
     }
 
@@ -401,6 +401,7 @@ sealed class RtspServer : IDisposable
     void SendFrame(Client client, VideoFrame frame, uint timestamp)
     {
         client.Timestamp = timestamp;
+        client.Touch();
         foreach (var slice in frame.Slices)
         {
             int seq = client.Sequence++ & 0xFFFF;
@@ -444,7 +445,53 @@ sealed class RtspServer : IDisposable
         socket.Send(packet, packet.Length, dest);
     }
 
-    bool PathOk(string url)
+    void RememberPresentation(Client client, string url, Dictionary<string, string> headers)
+    {
+        if (!string.IsNullOrEmpty(client.PresentationUrl))
+            return;
+        client.PresentationUrl = PresentationBase(client, url, headers);
+    }
+
+    string PresentationBase(Client client, string url, Dictionary<string, string> headers)
+    {
+        var local = (IPEndPoint)client.Tcp.Client.LocalEndPoint!;
+        string authority = AuthorityOf(url);
+        if (authority.Length == 0 && headers.TryGetValue("Host", out var host))
+            authority = host.Trim();
+        if (authority.Length == 0)
+            authority = $"{Unmap(local.Address)}:{local.Port}";
+        authority = WithPort(authority, local.Port);
+        var path = PresentationPath(url);
+        if (path == "/")
+            return $"rtsp://{authority}/";
+        return $"rtsp://{authority}{path}/";
+    }
+
+    static string AuthorityOf(string url)
+    {
+        int scheme = url.IndexOf("://", StringComparison.Ordinal);
+        if (scheme < 0) return "";
+        int start = scheme + 3;
+        int slash = url.IndexOf('/', start);
+        string host = slash < 0 ? url[start..] : url[start..slash];
+        int at = host.LastIndexOf('@');
+        if (at >= 0) host = host[(at + 1)..];
+        int q = host.IndexOf('?');
+        if (q >= 0) host = host[..q];
+        return host;
+    }
+
+    static string WithPort(string authority, int port)
+    {
+        if (authority.StartsWith('['))
+            return authority.Contains("]:", StringComparison.Ordinal) ? authority : $"{authority}:{port}";
+        int colon = authority.LastIndexOf(':');
+        if (colon > 0 && int.TryParse(authority[(colon + 1)..], out _))
+            return authority;
+        return $"{authority}:{port}";
+    }
+
+    static string PresentationPath(string url)
     {
         string path = url;
         int scheme = path.IndexOf("://", StringComparison.Ordinal);
@@ -455,13 +502,18 @@ sealed class RtspServer : IDisposable
         }
         int q = path.IndexOf('?');
         if (q >= 0) path = path[..q];
-        if (path.EndsWith("/track1", StringComparison.OrdinalIgnoreCase))
-            path = path[..^"/track1".Length];
+        string[] suffixes = { "/track1", "/trackID=0", "/trackID=1", "/trackID=2", "/video", "/audio" };
+        foreach (var suffix in suffixes)
+        {
+            if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                path = path[..^suffix.Length];
+                break;
+            }
+        }
         if (path.Length > 1) path = path.TrimEnd('/');
         if (path.Length == 0) path = "/";
-        var configured = _config.Path;
-        if (configured.Length > 1) configured = configured.TrimEnd('/');
-        return path.Equals(configured, StringComparison.OrdinalIgnoreCase);
+        return path;
     }
 
     string BuildSdp(Client client)
@@ -485,13 +537,6 @@ sealed class RtspServer : IDisposable
             $"a=framerate:{fps}\r\n" +
             "a=control:track1\r\n" +
             (frame == null ? "" : $"a=x-dimensions:{frame.Width},{frame.Height}\r\n");
-    }
-
-    string BaseUrl(Client client)
-    {
-        var local = (IPEndPoint)client.Tcp.Client.LocalEndPoint!;
-        var path = _config.Path.TrimEnd('/');
-        return $"rtsp://{Unmap(local.Address)}:{local.Port}{path}/";
     }
 
     bool Authorized(Dictionary<string, string> headers, string url, string method)
@@ -716,10 +761,10 @@ sealed class RtspServer : IDisposable
         public IPEndPoint Remote { get; }
         public object WriteLock { get; } = new();
         public string? SessionId { get; set; }
+        public string? PresentationUrl { get; set; }
         public volatile bool Playing;
         public bool Paused;
         public volatile bool Closed;
-        public bool TimedOut;
         public bool UseTcp = true;
         public int RtpChannel;
         public int RtcpChannel = 1;
