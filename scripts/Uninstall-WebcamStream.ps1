@@ -18,6 +18,29 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
+
+function Remove-WebcamFirewallRule {
+    param([string]$DisplayName)
+    $netsh = Join-Path $env:windir "System32\netsh.exe"
+    if (-not [Environment]::Is64BitProcess) {
+        $native = Join-Path $env:windir "Sysnative\netsh.exe"
+        if (Test-Path -LiteralPath $native) { $netsh = $native }
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $netsh
+    $psi.Arguments = "advfirewall firewall delete rule name=`"$DisplayName`""
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $p.StandardOutput.ReadToEnd() | Out-Null
+    $p.StandardError.ReadToEnd() | Out-Null
+    $p.WaitForExit()
+}
 
 function Invoke-Sc {
     param([string]$Arguments)
@@ -40,9 +63,8 @@ Start-Sleep -Seconds 1
 Invoke-Sc "delete WebcamStream"
 $task = Get-ScheduledTask -TaskName "WebcamStream" -ErrorAction SilentlyContinue
 if ($task) { Unregister-ScheduledTask -TaskName "WebcamStream" -Confirm:$false }
-foreach ($name in @("WebcamStream-RTSP-TCP", "WebcamStream-RTP-UDP")) {
-    $rule = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
-    if ($rule) { Remove-NetFirewallRule -Name $name }
+foreach ($name in @("WebcamStream RTSP", "WebcamStream RTP", "WebcamStream-RTSP-TCP", "WebcamStream-RTP-UDP")) {
+    Remove-WebcamFirewallRule -DisplayName $name
 }
 Get-Process WebcamStream -ErrorAction SilentlyContinue | Stop-Process -Force
 if ($Purge -and (Test-Path -LiteralPath $InstallDir)) {

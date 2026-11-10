@@ -26,7 +26,7 @@ SHA-256 of this build:
 
 ```text
 9fd7f2149f5808dda0b187f338a154fc775ae8a81282274e23476bc40ac11313  WebcamStream.exe
-86ab66e8653d41800ad43b46416d76923228fe96bc1d57dda471adb430cd6526  WebcamStream-win-x64.zip
+f73bfe3af62b32150bc23497411aa54582112246375dd3c3e93cb21a0a170e39  WebcamStream-win-x64.zip
 ```
 
 The public repository is <https://github.com/xlviitheroman/WebcamStream>. Once the source is on that repository, `.github/workflows/release.yml` builds this same exe on a Windows runner and attaches it to release **v1.0.0**. Those downloads will be:
@@ -174,7 +174,7 @@ If `--list-cameras` shows no `MJPG` line, the fallback compresses NV12, YUY2, or
 
 Windows 10 and 11 will refuse the camera if desktop apps are not allowed to use it. The installer is already running as administrator, and it forces the webcam on for every account before it registers the service or the scheduled task.
 
-It writes these values with the 64-bit registry editor:
+It writes these values through the 64-bit registry API. `reg.exe` is not used, because it rejects key names that contain `\.` or `{...}` and reports that the key cannot be found. Firewall rules are added with `netsh`. `New-NetFirewallRule` is not used, because on some PCs that cmdlet stops with "Invalid class".
 
 | Key | Value | What it does |
 | --- | --- | --- |
@@ -204,7 +204,8 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 
 | What you see | What to do |
 | --- | --- |
-| Exacq never connects | Confirm the URL, port 554, and the firewall rules. The log shows rejected addresses when the allow list is the reason. |
+| Installer stops with "Invalid class" or `reg.exe` cannot find a key | Use this copy of `Install-WebcamStream.ps1`. It opens the ports with `netsh` and writes the camera policy directly. Run it from an elevated PowerShell. |
+| Exacq never connects | Confirm the URL, port 554, and the firewall rules named WebcamStream RTSP and WebcamStream RTP. The log shows rejected addresses when the allow list is the reason. |
 | `ReadSample failed` or access denied | Run the installer again from an elevated PowerShell. It forces camera access on for every account. Sign out and back in if that user was already signed in, then run `--console` once. Close any other app that has the camera open. |
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |

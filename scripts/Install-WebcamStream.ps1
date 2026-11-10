@@ -32,6 +32,32 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
+
+# PowerShell 7 and 32-bit Windows PowerShell cannot see the real firewall provider
+# or the 64-bit policy keys. Continue in the 64-bit Windows PowerShell 5.1 host.
+if (-not ([Environment]::Is64BitProcess -and $PSVersionTable.PSEdition -eq "Desktop")) {
+    $hostExe = Join-Path $env:windir "System32\WindowsPowerShell\v1.0\powershell.exe"
+    if (-not [Environment]::Is64BitProcess) {
+        $native = Join-Path $env:windir "Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+        if (Test-Path -LiteralPath $native) { $hostExe = $native }
+    }
+    if (Test-Path -LiteralPath $hostExe) {
+        $forward = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath)
+        foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+            if ($entry.Value -is [switch]) {
+                if ($entry.Value) { $forward += "-" + $entry.Key }
+            } else {
+                $forward += "-" + $entry.Key
+                $forward += [string]$entry.Value
+            }
+        }
+        & $hostExe @forward
+        exit $LASTEXITCODE
+    }
+}
 
 function Find-Source {
     param([string]$Hint)
@@ -87,107 +113,224 @@ The release .exe published with this project is self-contained and does not need
 "@
 }
 
-function Get-NativeReg {
-    $sysnative = Join-Path $env:windir "Sysnative\reg.exe"
-    if (Test-Path -LiteralPath $sysnative) { return $sysnative }
-    return (Join-Path $env:windir "System32\reg.exe")
+function Invoke-Netsh {
+    param([string]$Arguments)
+    $netsh = Join-Path $env:windir "System32\netsh.exe"
+    if (-not [Environment]::Is64BitProcess) {
+        $native = Join-Path $env:windir "Sysnative\netsh.exe"
+        if (Test-Path -LiteralPath $native) { $netsh = $native }
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $netsh
+    $psi.Arguments = $Arguments
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $out = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
+    $p.WaitForExit()
+    return @{ Code = $p.ExitCode; Output = $out.Trim() }
 }
 
-function Add-RegValue {
-    param(
-        [string]$RegExe,
-        [string]$Key,
-        [string]$Name,
-        [string]$Type,
-        [string]$Data
-    )
-    & $RegExe add $Key /v $Name /t $Type /d $Data /f | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "reg add $Key /v $Name failed with exit code $LASTEXITCODE."
+function Set-WebcamFirewall {
+    param([string]$DisplayName, [string]$Protocol, [string]$Ports)
+    $firewall = Get-Service -Name MpsSvc -ErrorAction SilentlyContinue
+    if ($firewall -and $firewall.Status -ne "Running") {
+        if ($firewall.StartType -eq "Disabled") { Set-Service -Name MpsSvc -StartupType Manual }
+        Start-Service -Name MpsSvc
+    }
+    # New-NetFirewallRule uses a WMI class that is missing on some PCs ("Invalid class").
+    # netsh talks to the firewall service directly.
+    Invoke-Netsh "advfirewall firewall delete rule name=`"$DisplayName`"" | Out-Null
+    $added = Invoke-Netsh "advfirewall firewall add rule name=`"$DisplayName`" dir=in action=allow protocol=$Protocol localport=$Ports profile=any enable=yes"
+    if ($added.Code -ne 0) {
+        throw "Could not open inbound $Protocol $Ports in Windows Firewall.`n$($added.Output)"
     }
 }
 
 function Enable-WebcamForAllUsers {
-    $reg = Get-NativeReg
     Write-Host "Forcing the webcam on for every account on this PC."
+    if (-not ("WebcamStream.HiveLoader" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace WebcamStream {
+    public static class HiveLoader {
+        const uint TokenAdjustPrivileges = 0x0020;
+        const uint TokenQuery = 0x0008;
+        const uint PrivilegeEnabled = 0x2;
+        static readonly IntPtr HkeyUsers = new IntPtr(unchecked((int)0x80000003));
 
-    # 2 is Force Allow. 0 leaves the choice to each user, and 1 forces the camera off.
-    Add-RegValue $reg "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessCamera" "REG_DWORD" "2"
-    foreach ($exception in @("LetAppsAccessCamera_ForceDenyTheseApps", "LetAppsAccessCamera_UserInControlOfTheseApps")) {
-        & $reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" /v $exception /f 2>$null | Out-Null
+        [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+        [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+        [DllImport("advapi32.dll", SetLastError=true)]
+        static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+        static extern bool LookupPrivilegeValue(string system, string name, out Luid luid);
+        [DllImport("advapi32.dll", SetLastError=true)]
+        static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TokenPrivileges state, int length, IntPtr previous, IntPtr returned);
+        [DllImport("advapi32.dll", CharSet=CharSet.Unicode)]
+        static extern int RegLoadKey(IntPtr hive, string subKey, string file);
+        [DllImport("advapi32.dll", CharSet=CharSet.Unicode)]
+        static extern int RegUnLoadKey(IntPtr hive, string subKey);
+
+        [StructLayout(LayoutKind.Sequential)] struct Luid { public uint Low; public int High; }
+        [StructLayout(LayoutKind.Sequential)] struct LuidAndAttributes { public Luid Luid; public uint Attributes; }
+        [StructLayout(LayoutKind.Sequential)] struct TokenPrivileges { public uint Count; public LuidAndAttributes Privilege; }
+
+        public static void Enable(string name) {
+            IntPtr token;
+            if (!OpenProcessToken(GetCurrentProcess(), TokenAdjustPrivileges | TokenQuery, out token))
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            try {
+                Luid luid;
+                if (!LookupPrivilegeValue(null, name, out luid))
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                LuidAndAttributes privilege = new LuidAndAttributes();
+                privilege.Luid = luid;
+                privilege.Attributes = PrivilegeEnabled;
+                TokenPrivileges privileges = new TokenPrivileges();
+                privileges.Count = 1;
+                privileges.Privilege = privilege;
+                if (!AdjustTokenPrivileges(token, false, ref privileges, 0, IntPtr.Zero, IntPtr.Zero))
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                int error = Marshal.GetLastWin32Error();
+                if (error != 0) throw new System.ComponentModel.Win32Exception(error);
+            } finally { CloseHandle(token); }
+        }
+
+        public static int Load(string subKey, string file) { return RegLoadKey(HkeyUsers, subKey, file); }
+        public static int Unload(string subKey) { return RegUnLoadKey(HkeyUsers, subKey); }
     }
-    # 1 allows the camera device. 0 disables it for the whole PC.
-    Add-RegValue $reg "HKLM\SOFTWARE\Policies\Microsoft\Camera" "AllowCamera" "REG_DWORD" "1"
+}
+'@
+    }
 
+    $view = [Microsoft.Win32.RegistryView]::Registry64
+    $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $view)
+    $hku = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::Users, $view)
+    $webcamGuid = "{E5323777-F976-4f5b-9B55-B94699C46E44}"
     $consent = @(
         "SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam",
         "SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam\NonPackaged",
-        "SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}"
+        ("SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\" + $webcamGuid)
     )
-    $webcamGuid = "{E5323777-F976-4f5b-9B55-B94699C46E44}"
-    $roots = New-Object System.Collections.Generic.List[string]
-    $roots.Add("HKLM")
-    $roots.Add("HKU\.DEFAULT")
 
-    Get-ChildItem -Path Registry::HKEY_USERS -ErrorAction SilentlyContinue | ForEach-Object {
-        $name = $_.PSChildName
-        if ($name -like "*_Classes" -or $name -eq ".DEFAULT") { return }
-        if ($name -match '^S-1-5-21-\d+-\d+-\d+-\d+$') { $roots.Add("HKU\$name") }
+    function Set-RegString([Microsoft.Win32.RegistryKey]$Root, [string]$SubKey, [string]$Name, [string]$Data) {
+        $key = $Root.CreateSubKey($SubKey)
+        if ($null -eq $key) { throw "Could not create registry key $SubKey." }
+        try { $key.SetValue($Name, $Data, [Microsoft.Win32.RegistryValueKind]::String) }
+        finally { $key.Dispose() }
     }
-
-    $mounted = New-Object System.Collections.Generic.List[string]
-    function Mount-OfflineHive {
-        param([string]$File, [string]$Name)
-        if (-not (Test-Path -LiteralPath $File)) { return $false }
-        & $reg load "HKU\$Name" $File | Out-Null
-        if ($LASTEXITCODE -ne 0) { return $false }
-        $mounted.Add($Name)
-        return $true
+    function Set-RegDword([Microsoft.Win32.RegistryKey]$Root, [string]$SubKey, [string]$Name, [int]$Data) {
+        $key = $Root.CreateSubKey($SubKey)
+        if ($null -eq $key) { throw "Could not create registry key $SubKey." }
+        try { $key.SetValue($Name, $Data, [Microsoft.Win32.RegistryValueKind]::DWord) }
+        finally { $key.Dispose() }
     }
-
-    $profileList = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
-    if (Test-Path -LiteralPath $profileList) {
-        foreach ($sidKey in Get-ChildItem -LiteralPath $profileList) {
-            $sid = $sidKey.PSChildName
-            if ($sid -notmatch '^S-1-5-21-\d+-\d+-\d+-\d+$') { continue }
-            if ($roots.Contains("HKU\$sid")) { continue }
-            $image = (Get-ItemProperty -LiteralPath $sidKey.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath
-            if (-not $image) { continue }
-            $ntuser = Join-Path ([Environment]::ExpandEnvironmentVariables($image)) "NTUSER.DAT"
-            $mount = "WebcamStream_" + $sid.Replace("-", "_")
-            if (Mount-OfflineHive $ntuser $mount) {
-                $roots.Add("HKU\$mount")
-            } else {
-                Write-Host "Could not open the profile for $sid. The machine policy still forces the camera on for that account."
-            }
+    function Set-WebcamConsent([Microsoft.Win32.RegistryKey]$Root, [bool]$Machine) {
+        foreach ($sub in $consent) { Set-RegString $Root $sub "Value" "Allow" }
+        if ($Machine) {
+            Set-RegDword $Root ("SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Overrides\" + $webcamGuid) "SensorPermissionState" 1
+        } else {
+            Set-RegDword $Root ("SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Permissions\" + $webcamGuid) "SensorPermissionState" 1
         }
     }
 
-    $defaultProfile = Join-Path $env:SystemDrive "Users\Default\NTUSER.DAT"
-    if (Mount-OfflineHive $defaultProfile "WebcamStream_DefaultUser") {
-        $roots.Add("HKU\WebcamStream_DefaultUser")
+    # 2 is Force Allow. 0 leaves the choice to each user, and 1 forces the camera off.
+    Set-RegDword $hklm "SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessCamera" 2
+    $privacy = $hklm.CreateSubKey("SOFTWARE\Policies\Microsoft\Windows\AppPrivacy")
+    try {
+        foreach ($exception in @("LetAppsAccessCamera_ForceDenyTheseApps", "LetAppsAccessCamera_UserInControlOfTheseApps")) {
+            $privacy.DeleteValue($exception, $false)
+        }
+    } finally { $privacy.Dispose() }
+    # 1 allows the camera device. 0 disables it for the whole PC.
+    Set-RegDword $hklm "SOFTWARE\Policies\Microsoft\Camera" "AllowCamera" 1
+    Set-WebcamConsent $hklm $true
+
+    function Test-UserAccount([string]$Name) {
+        if ($Name -like "*_Classes") { return $false }
+        if ($Name -eq ".DEFAULT") { return $true }
+        if ($Name -match '^(S-1-5-18|S-1-5-19|S-1-5-20)$') { return $false }
+        return $Name -match '^S-1-\d+(-\d+)+$'
+    }
+
+    $loaded = @{}
+    foreach ($name in @($hku.GetSubKeyNames())) { $loaded[$name] = $true }
+    foreach ($name in @($loaded.Keys)) {
+        if (-not (Test-UserAccount $name)) { continue }
+        $hive = $hku.OpenSubKey($name, $true)
+        if ($null -eq $hive) { continue }
+        try { Set-WebcamConsent $hive $false }
+        catch { Write-Host "Could not update camera consent for $name. The machine policy still forces the camera on. $($_.Exception.Message)" }
+        finally { $hive.Dispose() }
+    }
+
+    $canLoadOffline = $true
+    try {
+        [WebcamStream.HiveLoader]::Enable("SeBackupPrivilege")
+        [WebcamStream.HiveLoader]::Enable("SeRestorePrivilege")
+    } catch {
+        $canLoadOffline = $false
+        Write-Host "Could not enable backup privileges, so signed-out profiles were not edited. The machine policy still forces the camera on."
+    }
+
+    $mounted = New-Object System.Collections.Generic.List[string]
+    function Mount-OfflineHive([string]$Name, [string]$File) {
+        if (-not $canLoadOffline -or -not (Test-Path -LiteralPath $File)) { return $false }
+        $code = [WebcamStream.HiveLoader]::Load($Name, $File)
+        if ($code -eq 0 -or $code -eq 183) {
+            $mounted.Add($Name)
+            return $true
+        }
+        Write-Host "Could not open $File ($((New-Object System.ComponentModel.Win32Exception($code)).Message)). The machine policy still forces the camera on."
+        return $false
+    }
+    function Update-MountedHive([string]$Name) {
+        $hive = $hku.OpenSubKey($Name, $true)
+        if ($null -eq $hive) { throw "Loaded profile $Name was not visible in the registry." }
+        try { Set-WebcamConsent $hive $false }
+        finally { $hive.Dispose() }
     }
 
     try {
-        foreach ($root in $roots) {
-            foreach ($relative in $consent) {
-                Add-RegValue $reg "$root\$relative" "Value" "REG_SZ" "Allow"
-            }
-            if ($root -eq "HKLM") {
-                Add-RegValue $reg "$root\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Overrides\$webcamGuid" "SensorPermissionState" "REG_DWORD" "1"
-            } else {
-                Add-RegValue $reg "$root\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Permissions\$webcamGuid" "SensorPermissionState" "REG_DWORD" "1"
-            }
+        $profileList = $hklm.OpenSubKey("SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList")
+        if ($null -ne $profileList) {
+            try {
+                foreach ($sid in @($profileList.GetSubKeyNames())) {
+                    if (-not (Test-UserAccount $sid)) { continue }
+                    if ($loaded.ContainsKey($sid)) { continue }
+                    $profile = $profileList.OpenSubKey($sid)
+                    if ($null -eq $profile) { continue }
+                    try { $image = [string]$profile.GetValue("ProfileImagePath") }
+                    finally { $profile.Dispose() }
+                    if (-not $image) { continue }
+                    $ntuser = Join-Path ([Environment]::ExpandEnvironmentVariables($image)) "NTUSER.DAT"
+                    $mount = "WebcamStream_" + $sid.Replace("-", "_")
+                    if (-not (Mount-OfflineHive $mount $ntuser)) { continue }
+                    try { Update-MountedHive $mount }
+                    catch { Write-Host "Could not update camera consent for $sid. The machine policy still forces the camera on. $($_.Exception.Message)" }
+                }
+            } finally { $profileList.Dispose() }
+        }
+        $defaultProfile = Join-Path $env:SystemDrive "Users\Default\NTUSER.DAT"
+        if (Mount-OfflineHive "WebcamStream_DefaultUser" $defaultProfile) {
+            try { Update-MountedHive "WebcamStream_DefaultUser" }
+            catch { Write-Host "Could not update the Default user profile. The machine policy still forces the camera on. $($_.Exception.Message)" }
         }
     } finally {
         foreach ($name in @($mounted)) {
             [gc]::Collect()
-            Start-Sleep -Milliseconds 200
-            & $reg unload "HKU\$name" | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "The profile hive HKU\$name is still loaded. Sign off and run 'reg unload HKU\$name' if Windows reports the file in use."
+            [gc]::WaitForPendingFinalizers()
+            $code = [WebcamStream.HiveLoader]::Unload($name)
+            if ($code -ne 0) {
+                Write-Host "The profile hive $name is still loaded ($((New-Object System.ComponentModel.Win32Exception($code)).Message))."
             }
         }
+        $hku.Dispose()
+        $hklm.Dispose()
     }
 
     Write-Host "Webcam access is forced on for Windows apps, and desktop apps are allowed."
@@ -232,12 +375,8 @@ if (-not (Test-Path -LiteralPath $config)) {
 $exe = Join-Path $InstallDir "WebcamStream.exe"
 $port, $rtpStart, $rtpEnd = Read-StreamSettings $config
 
-foreach ($name in @("WebcamStream-RTSP-TCP", "WebcamStream-RTP-UDP")) {
-    $existing = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
-    if ($existing) { Remove-NetFirewallRule -Name $name }
-}
-New-NetFirewallRule -Name "WebcamStream-RTSP-TCP" -DisplayName "WebcamStream RTSP" -Direction Inbound -Action Allow -Protocol TCP -LocalPort $port -Profile Any | Out-Null
-New-NetFirewallRule -Name "WebcamStream-RTP-UDP" -DisplayName "WebcamStream RTP" -Direction Inbound -Action Allow -Protocol UDP -LocalPort "$rtpStart-$rtpEnd" -Profile Any | Out-Null
+Set-WebcamFirewall -DisplayName "WebcamStream RTSP" -Protocol "TCP" -Ports "$port"
+Set-WebcamFirewall -DisplayName "WebcamStream RTP" -Protocol "UDP" -Ports "$rtpStart-$rtpEnd"
 
 Enable-WebcamForAllUsers
 
