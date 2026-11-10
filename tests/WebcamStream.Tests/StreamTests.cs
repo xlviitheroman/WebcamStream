@@ -299,6 +299,8 @@ public class StreamTests
         Assert.Contains("JPEG/90000", root);
         Assert.Contains("a=range:npt=0-", root);
         Assert.DoesNotContain("sendonly", root);
+        Assert.Contains($"s={RtspServer.SessionTitle()}", root);
+        Assert.Contains($"i={RtspServer.SessionTitle()}", root);
         var track = await Exchange(stream, $"SETUP rtsp://nvr.office.example:554/trackID=1 RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\nAuthorization: {auth}\r\n\r\n");
         Assert.Contains("200", track);
         Assert.Contains("timeout=600", track);

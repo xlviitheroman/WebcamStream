@@ -538,14 +538,15 @@ sealed class RtspServer : IDisposable
         var local = Unmap(((IPEndPoint)client.Tcp.Client.LocalEndPoint!).Address);
         var frame = _latest;
         int fps = Math.Clamp(_config.Fps, 1, 15);
+        string title = SessionTitle();
         // LIVE555 2016, which Exacq sends as its user agent, treats a=sendonly as a
         // backchannel. It then finishes DESCRIBE and never sends SETUP. The lines
         // below are the ones that client's own server advertises for a JPEG stream.
         return
             "v=0\r\n" +
             $"o=- 1 1 IN IP4 {local}\r\n" +
-            "s=WebcamStream\r\n" +
-            "i=webcam\r\n" +
+            $"s={title}\r\n" +
+            $"i={title}\r\n" +
             "t=0 0\r\n" +
             "a=tool:WebcamStream\r\n" +
             "a=type:broadcast\r\n" +
@@ -557,6 +558,14 @@ sealed class RtspServer : IDisposable
             $"a=framerate:{fps}\r\n" +
             "a=control:track1\r\n" +
             (frame == null ? "" : $"a=x-dimensions:{frame.Width} {frame.Height}\r\n");
+    }
+
+    internal static string SessionTitle()
+    {
+        string host = Environment.MachineName.Trim();
+        var chars = host.Where(c => c is >= ' ' and < (char)127).Take(40).ToArray();
+        host = new string(chars).Trim();
+        return host.Length == 0 ? "Webcam" : host + " - Webcam";
     }
 
     bool Authorized(Dictionary<string, string> headers, string url, string method, out string why)
