@@ -25,12 +25,12 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-dc9c39b7485704c0a72a72cf0fafb8a4b1483ef3dbbc52d244e64e35662ac488  WebcamStream-win-x64.zip
+b731e514ccd66f061faebc6f0c8bb620fc79a4972562e381462db100a9cab827  WebcamStream-win-x64.zip
 ```
 
-The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.12**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.12**:
+The public repository is <https://github.com/xlviitheroman/WebcamStream>. The current build is **1.0.13**. `.github/workflows/release.yml` builds this package on a Windows runner and attaches it to release **v1.0.13**:
 
-- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.12/WebcamStream-win-x64.zip>
+- <https://github.com/xlviitheroman/WebcamStream/releases/download/v1.0.13/WebcamStream-win-x64.zip>
 
 Unzip the whole folder and run the installer from there. `WebcamStream.exe` needs the files beside it, which is what lets the Windows service answer before Windows gives up with error 1053. Older releases are deleted when a new build is published.
 
@@ -210,7 +210,8 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | What you see | What to do |
 | --- | --- |
 | Installer stops with "Invalid class" or `reg.exe` cannot find a key | Use this copy of `Install-WebcamStream.ps1`. It opens the ports with `netsh` and writes the camera policy directly. Run it from an elevated PowerShell. |
-| Exacq says DESCRIBE 404, connect timeout, or no RTSP session | VLC can play while Exacq asks for a different path and then drops the quiet session at 60 seconds. 1.0.12 accepts the path Exacq requests and keeps the session while Exacq is recording. The log line `RTSP DESCRIBE` shows the URL Exacq used. Username `webcam`, password `webcam1`, port 554. |
+| Exacq says 401 Unauthorized | The path is accepted and the login was rejected. Put `webcam` and `webcam1` in Exacq's username and password fields. 1.0.13 accepts Exacq's digest login. `WebcamStream.log` names the username Exacq sent, or says that none was sent. |
+| Exacq says DESCRIBE 404, connect timeout, or no RTSP session | 1.0.12 and later accept the path Exacq requests and keep the session while Exacq is recording. The log line `RTSP DESCRIBE` shows the URL Exacq used. |
 | `0x80070005` or access denied | Close any other app that has the camera open. Run the installer again from an elevated PowerShell with `-Start`. It allows the camera, restarts the camera broker, and starts WebcamStream in the signed-in session. |
 | `--console` sits there and Windows marks it Suspended | That was the camera call blocking. 1.0.3 and later print the refusal and exit within about 8 seconds. Close other camera apps, then run the installer with `-Start` before starting `--console` again. |
 | Uninstall leaves the WebcamStream service | Use this `Uninstall-WebcamStream.ps1`. It turns off the service restart policy, stops WebcamStream, ends the process if Windows will not, and deletes the service. Close `services.msc` if it is open, then run the uninstall again. |

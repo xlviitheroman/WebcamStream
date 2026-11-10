@@ -379,6 +379,17 @@ public class StreamTests
         await other.ConnectAsync(IPAddress.Loopback, server.Port);
         var urlLogin = await Exchange(other.GetStream(), "DESCRIBE rtsp://nvr:secret@127.0.0.1/webcam RTSP/1.0\r\nCSeq: 1\r\n\r\n");
         Assert.Contains("200", urlLogin);
+
+        string Md5(string text) => Convert.ToHexString(System.Security.Cryptography.MD5.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+        string legacyUri = "rtsp://127.0.0.1/webcam";
+        string ha1 = Md5($"nvr:WebcamStream:secret");
+        string ha2 = Md5($"DESCRIBE:{legacyUri}");
+        string legacyResponse = Md5($"{ha1}:{nonce}:{ha2}").ToUpperInvariant();
+        string legacy = $"Digest username=\"nvr\", realm=\"WebcamStream\", nonce=\"{nonce}\", uri=\"{legacyUri}\", response=\"{legacyResponse}\"";
+        using var exacq = new TcpClient();
+        await exacq.ConnectAsync(IPAddress.Loopback, server.Port);
+        var legacyOk = await Exchange(exacq.GetStream(), $"DESCRIBE {legacyUri} RTSP/1.0\r\nCSeq: 1\r\nAuthorization: {legacy}\r\n\r\n");
+        Assert.Contains("200", legacyOk);
     }
 
     static string Basic(string user, string pass) =>

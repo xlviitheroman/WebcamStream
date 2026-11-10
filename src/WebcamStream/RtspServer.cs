@@ -216,11 +216,15 @@ sealed class RtspServer : IDisposable
             }
         }
 
-        bool authed = method == "OPTIONS" || Authorized(headers, url, method);
+        string why = "";
+        bool authed = method == "OPTIONS" || Authorized(headers, url, method, out why);
         if (!authed)
         {
+            Log.Info($"RTSP {method} from {client.Remote.Address} was rejected: {why}.");
+            // qop is omitted on purpose. Exacq answers qop with a digest that does not
+            // include qop, so advertising it makes every DESCRIBE come back 401.
             Respond(client, cseq, 401, "Unauthorized",
-                $"WWW-Authenticate: Digest realm=\"{Realm}\", nonce=\"{_nonce}\", algorithm=MD5, qop=\"auth\"\r\n" +
+                $"WWW-Authenticate: Digest realm=\"{Realm}\", nonce=\"{_nonce}\", algorithm=\"MD5\"\r\n" +
                 $"WWW-Authenticate: Basic realm=\"{Realm}\"\r\n");
             return;
         }
@@ -539,52 +543,98 @@ sealed class RtspServer : IDisposable
             (frame == null ? "" : $"a=x-dimensions:{frame.Width},{frame.Height}\r\n");
     }
 
-    bool Authorized(Dictionary<string, string> headers, string url, string method)
+    bool Authorized(Dictionary<string, string> headers, string url, string method, out string why)
     {
+        why = "no username or password was sent";
         if (headers.TryGetValue("Authorization", out var value))
         {
             if (value.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
-                return BasicOk(value["Basic ".Length..].Trim());
+            {
+                if (BasicOk(value["Basic ".Length..].Trim(), out why)) return true;
+                return false;
+            }
             if (value.StartsWith("Digest ", StringComparison.OrdinalIgnoreCase))
-                return DigestOk(value["Digest ".Length..], method);
+            {
+                if (DigestOk(value["Digest ".Length..], method, out why)) return true;
+                return false;
+            }
+            why = "authorization was not Basic or Digest";
             return false;
         }
-        return UserInfoOk(url);
+        if (UserInfoOk(url)) return true;
+        return false;
     }
 
-    bool BasicOk(string token)
+    bool BasicOk(string token, out string why)
     {
+        why = "username or password was not accepted";
         string decoded;
-        try { decoded = Encoding.UTF8.GetString(Convert.FromBase64String(token)); }
-        catch { return false; }
+        try { decoded = Encoding.UTF8.GetString(Convert.FromBase64String(token.Trim())); }
+        catch
+        {
+            why = "basic login could not be read";
+            return false;
+        }
         int colon = decoded.IndexOf(':');
         if (colon < 0) return false;
-        return Credentials(decoded[..colon], decoded[(colon + 1)..]);
+        string user = decoded[..colon].Trim();
+        if (!FixedEquals(user, _config.Username))
+        {
+            why = $"username \"{Shown(user)}\" was not accepted";
+            return false;
+        }
+        if (!Credentials(user, decoded[(colon + 1)..]))
+        {
+            why = "password was not accepted";
+            return false;
+        }
+        return true;
     }
 
-    bool DigestOk(string value, string method)
+    bool DigestOk(string value, string method, out string why)
     {
+        why = "digest login could not be read";
         var fields = ParseDigest(value);
         if (!fields.TryGetValue("username", out var user)) return false;
-        if (!fields.TryGetValue("realm", out var realm) || !string.Equals(realm, Realm, StringComparison.Ordinal)) return false;
-        if (!fields.TryGetValue("nonce", out var nonce) || !FixedEquals(nonce, _nonce)) return false;
-        if (!fields.TryGetValue("uri", out var uri)) return false;
-        if (!fields.TryGetValue("response", out var response)) return false;
-        if (!FixedEquals(user, _config.Username)) return false;
+        user = user.Trim();
+        if (!FixedEquals(user, _config.Username))
+        {
+            why = $"username \"{Shown(user)}\" was not accepted";
+            return false;
+        }
+        if (fields.TryGetValue("realm", out var realm) && realm.Length > 0 && !string.Equals(realm, Realm, StringComparison.Ordinal))
+        {
+            why = $"digest realm \"{Shown(realm)}\" was not {Realm}";
+            return false;
+        }
+        if (!fields.TryGetValue("nonce", out var nonce) || !HexEquals(nonce.Trim(), _nonce))
+        {
+            why = "digest nonce was not the one this server sent";
+            return false;
+        }
+        if (!fields.TryGetValue("uri", out var uri) || !fields.TryGetValue("response", out var response))
+            return false;
+
         string ha1 = Md5Hex($"{_config.Username}:{Realm}:{_config.Password}");
+        if (fields.TryGetValue("algorithm", out var algorithm) && algorithm.Equals("MD5-sess", StringComparison.OrdinalIgnoreCase)
+            && fields.TryGetValue("cnonce", out var sessNonce))
+            ha1 = Md5Hex($"{ha1}:{_nonce}:{sessNonce}");
         string ha2 = Md5Hex($"{method}:{uri}");
-        string expected;
-        if (fields.TryGetValue("qop", out var qop) && qop.Equals("auth", StringComparison.OrdinalIgnoreCase))
+        var expected = new List<string> { Md5Hex($"{ha1}:{_nonce}:{ha2}") };
+        if (fields.TryGetValue("nc", out var nc) && fields.TryGetValue("cnonce", out var cnonce))
         {
-            if (!fields.TryGetValue("nc", out var nc) || !fields.TryGetValue("cnonce", out var cnonce))
-                return false;
-            expected = Md5Hex($"{ha1}:{_nonce}:{nc}:{cnonce}:{qop}:{ha2}");
+            string qop = "auth";
+            if (fields.TryGetValue("qop", out var sent) && sent.Length > 0)
+                qop = sent.Split(',')[0].Trim();
+            if (qop.Equals("auth", StringComparison.OrdinalIgnoreCase))
+                expected.Add(Md5Hex($"{ha1}:{_nonce}:{nc}:{cnonce}:{qop}:{ha2}"));
         }
-        else
+        foreach (var hash in expected)
         {
-            expected = Md5Hex($"{ha1}:{_nonce}:{ha2}");
+            if (HexEquals(response.Trim(), hash)) return true;
         }
-        return FixedEquals(response, expected);
+        why = "digest password was not accepted";
+        return false;
     }
 
     static Dictionary<string, string> ParseDigest(string value)
@@ -642,6 +692,15 @@ sealed class RtspServer : IDisposable
     {
         var hash = MD5.HashData(Encoding.UTF8.GetBytes(text));
         return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    static bool HexEquals(string a, string b) =>
+        a.Length == b.Length && a.Equals(b, StringComparison.OrdinalIgnoreCase);
+
+    static string Shown(string value)
+    {
+        var chars = value.Where(c => c >= ' ' && c < 127).Take(64).ToArray();
+        return new string(chars);
     }
 
     static bool FixedEquals(string a, string b)
