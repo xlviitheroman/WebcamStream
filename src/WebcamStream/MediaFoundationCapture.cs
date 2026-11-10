@@ -341,7 +341,7 @@ static class MediaFoundationCapture
     static string AccessDenied(int hr, string what)
     {
         if (hr == unchecked((int)0x80070005))
-            return $"{what} failed (0x80070005 access denied). Windows refused the camera. Run Install-WebcamStream.ps1 from an elevated PowerShell, then sign out and back in. The service opens the camera in the signed-in session, not in session 0.";
+            return $"{what} failed (0x80070005 access denied). Windows refused the camera. Close any other app using it, then run Install-WebcamStream.ps1 -Start from an elevated PowerShell. That starts WebcamStream in the signed-in session.";
         return $"{what} failed (0x{hr:X8}).";
     }
 

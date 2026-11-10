@@ -25,8 +25,8 @@ Unzip it, then use the install commands below.
 SHA-256 of this build:
 
 ```text
-b8f40138cc95103052d10f4eaff04d86607d5e41ada8c67fc5dd52e28ba3588c  WebcamStream.exe
-0de398c5025bed46d1dedc410ff327413999b2eaa7fe2a1590ea680317cf799e  WebcamStream-win-x64.zip
+3a138cb3fe9c3ca43cd4d77302ae0396962c240cad4a46628c2946b79321d5da  WebcamStream.exe
+9b1266463ad08d7337ecf1c940cdf694e648b8d3633e3ac76b5090fc2a379860  WebcamStream-win-x64.zip
 ```
 
 The public repository is <https://github.com/xlviitheroman/WebcamStream>. Once the source is on that repository, `.github/workflows/release.yml` builds this same exe on a Windows runner and attaches it to release **v1.0.0**. Those downloads will be:
@@ -81,7 +81,7 @@ or:
 .\Install-WebcamStream.ps1 -Mode Service
 ```
 
-Add `-Start` to start it immediately. `-User "OFFICE\nvr"` chooses who the scheduled task runs as. The default is the account that runs the installer.
+Add `-Start` to open the camera now in the session that is already signed in. You do not have to sign out. The scheduled task starts as that user, not as the elevated installer. The service starts as LocalSystem and launches the camera in the signed-in session. `-User "OFFICE\nvr"` chooses who the scheduled task runs as. The default is the account that runs the installer.
 
 The script copies `WebcamStream.exe` to `C:\ProgramData\WebcamStream`, writes `config.jsonc` if it is not already there, and opens the firewall for TCP 554 and the UDP port range in the config. It does not overwrite a config you have already edited.
 
@@ -189,7 +189,7 @@ The machine keys cover the PC. The same consent values are then written for `.DE
 
 The installer also turns off Media Foundation frame-server mode. That broker returns `0x80070005` (access denied) to a Windows service even when the privacy switch is on. With it off, WebcamStream opens the camera device directly. LocalSystem, Local Service, and Network Service receive the same Allow values as a signed-in user. The program folder grants SYSTEM full control and Users read and execute, so the service and the signed-in worker can both start the exe.
 
-The service itself stays in session 0. It starts a worker in the signed-in session, which is the session Windows will let open a camera. Someone who is already signed in may need to sign out once before Media Foundation notices the change. Uninstall removes the service, the task, and the firewall rules. It does not turn the camera back off and it does not turn frame-server mode back on.
+The service itself stays in session 0. It starts a worker in the signed-in session, which is the session Windows will let open a camera. The installer restarts the camera frame server and the capability broker, then `-Start` launches a new process that reads the new permission. A sign-out is not required. Uninstall removes the service, the task, and the firewall rules. It does not turn the camera back off and it does not turn frame-server mode back on.
 
 The scheduled task and the service worker both run as the signed-in user, in that user's session. A service that tried to open the camera from session 0 usually gets access denied. WebcamStream does not do that.
 
@@ -208,7 +208,7 @@ Copy `config/config.jsonc` next to the exe if you are assembling a folder by han
 | --- | --- |
 | Installer stops with "Invalid class" or `reg.exe` cannot find a key | Use this copy of `Install-WebcamStream.ps1`. It opens the ports with `netsh` and writes the camera policy directly. Run it from an elevated PowerShell. |
 | Exacq never connects | Confirm the URL, port 554, and the firewall rules named WebcamStream RTSP and WebcamStream RTP. The log shows rejected addresses when the allow list is the reason. |
-| `0x80070005` or access denied | Run the installer again from an elevated PowerShell. It allows the camera for every account, including LocalSystem, and turns off the frame server that blocks a service. Sign out and back in, then start the service or the scheduled task. Close any other app that has the camera open. |
+| `0x80070005` or access denied | Close any other app that has the camera open. Run the installer again from an elevated PowerShell with `-Start`. It allows the camera, restarts the camera broker, and starts WebcamStream in the signed-in session. |
 | No `MJPG` mode | The stream still works, using software JPEG. CPU use will be higher. 4 fps keeps it bounded. |
 | Port already in use | Change `port` in the config. 554 is correct. Use another port only when some other program already owns it, and put that same port in the Exacq URL. |
 | Two copies running | A mutex named `Global\WebcamStream` stops a second copy. Uninstall the service if you only want the scheduled task, or the other way around. The installer removes the other one when you install. |

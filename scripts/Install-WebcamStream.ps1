@@ -339,15 +339,14 @@ namespace WebcamStream {
         $hklm.Dispose()
     }
 
-    foreach ($svcName in @("FrameServer", "FrameServerMonitor")) {
+    foreach ($svcName in @("FrameServer", "FrameServerMonitor", "camsvc")) {
         $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
         if (-not $svc) { continue }
         try { Restart-Service -Name $svcName -Force -ErrorAction Stop }
-        catch { Write-Host "Could not restart $svcName. Reboot if the camera still returns 0x80070005." }
+        catch { Write-Host "Left $svcName running. A newly started WebcamStream still reads the camera permission." }
     }
 
     Write-Host "Webcam access is forced on for Windows apps, desktop apps, and the WebcamStream service."
-    Write-Host "A person who is already signed in may need to sign out once before the camera opens."
 }
 
 function Grant-WebcamStreamAccess {
@@ -384,13 +383,20 @@ function Invoke-Sc {
     $p = [System.Diagnostics.Process]::Start($psi)
     $out = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
     $p.WaitForExit()
-    if ($p.ExitCode -ne 0 -and $out -notmatch "1060") {
+    if ($p.ExitCode -ne 0 -and $out -notmatch "1060|1062") {
         throw "sc.exe $Arguments failed ($($p.ExitCode)): $out"
     }
 }
 
+function Stop-ExistingWebcamStream {
+    Get-Process -Name WebcamStream -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Invoke-Sc "stop WebcamStream"
+    Start-Sleep -Seconds 1
+}
+
 $source = Find-Source $SourceDir
 Test-FrameworkBuild $source
+Stop-ExistingWebcamStream
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $source "WebcamStream.exe") -Destination (Join-Path $InstallDir "WebcamStream.exe") -Force
 Get-ChildItem -LiteralPath $source -Filter "*.pdb" -ErrorAction SilentlyContinue | ForEach-Object {
@@ -421,9 +427,7 @@ Enable-WebcamForAllUsers
 
 if ($Mode -eq "Service") {
     Write-Host "Installing the WebcamStream Windows service."
-    Write-Host "It runs as LocalSystem. After someone signs in, the camera opens in that person's session."
-    Invoke-Sc "stop WebcamStream"
-    Start-Sleep -Seconds 1
+    Write-Host "It runs as LocalSystem and opens the camera in the signed-in session."
     Invoke-Sc "delete WebcamStream"
     Start-Sleep -Seconds 1
     $task = Get-ScheduledTask -TaskName "WebcamStream" -ErrorAction SilentlyContinue
@@ -434,8 +438,13 @@ if ($Mode -eq "Service") {
     Invoke-Sc "description WebcamStream `"Webcam RTSP stream for recorders such as ExacqVision. Low CPU, no GPU.`""
     Invoke-Sc "failure WebcamStream reset= 86400 actions= restart/5000/restart/15000/restart/60000"
     Invoke-Sc "config WebcamStream start= auto"
-    if ($Start) { Invoke-Sc "start WebcamStream" }
-    Write-Host "Service installed. Config: $config"
+    if ($Start) {
+        Invoke-Sc "start WebcamStream"
+        Write-Host "Service started. The camera is opening in the signed-in session now."
+    } else {
+        Write-Host "Service installed. It opens the camera when someone is signed in."
+    }
+    Write-Host "Config: $config"
     Write-Host "RTSP URL: rtsp://<this-pc>:$port/webcam"
     return
 }
@@ -445,9 +454,7 @@ if (-not $User) {
     else { $User = $env:USERNAME }
 }
 Write-Host "Installing a scheduled task that runs at logon as $User."
-Write-Host "This is the reliable way to open the webcam, because it runs in the signed-on session."
-Invoke-Sc "stop WebcamStream"
-Start-Sleep -Seconds 1
+Write-Host "This runs in the signed-on session, which is what Windows requires to open the webcam."
 Invoke-Sc "delete WebcamStream"
 
 $action = New-ScheduledTaskAction -Execute $exe -Argument "--console --config `"$config`"" -WorkingDirectory $InstallDir
@@ -457,8 +464,16 @@ $existingTask = Get-ScheduledTask -TaskName "WebcamStream" -ErrorAction Silently
 if ($existingTask) { Unregister-ScheduledTask -TaskName "WebcamStream" -Confirm:$false }
 Register-ScheduledTask -TaskName "WebcamStream" -Action $action -Trigger $trigger -Settings $settings -User $User -RunLevel Limited -Description "Webcam RTSP stream for recorders such as ExacqVision." | Out-Null
 if ($Start) {
-    Start-Process -FilePath $exe -ArgumentList "--console", "--config", $config -WorkingDirectory $InstallDir
+    # Start-ScheduledTask uses the task account in the signed-in session.
+    # Start-Process would inherit this elevated installer token instead.
+    try {
+        Start-ScheduledTask -TaskName "WebcamStream"
+        Write-Host "Started WebcamStream in the $User session."
+    } catch {
+        Write-Host "WebcamStream will start the next time $User signs in."
+    }
+} else {
+    Write-Host "Scheduled task installed. It starts the next time $User signs in."
 }
-Write-Host "Scheduled task installed. It starts the next time $User signs in."
 Write-Host "Config: $config"
 Write-Host "RTSP URL: rtsp://<this-pc>:$port/webcam"
